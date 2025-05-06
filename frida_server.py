@@ -6,8 +6,228 @@ from openai import OpenAI
 import time
 import random
 import threading
+from flask_swagger_ui import get_swaggerui_blueprint
 
 app = Flask(__name__)
+
+# Set up Swagger UI
+SWAGGER_URL = "/api/docs"  # URL for exposing Swagger UI
+API_URL = "/static/swagger.json"  # Our API url (can of course be a local resource)
+
+# Call factory function to create our blueprint
+swaggerui_blueprint = get_swaggerui_blueprint(
+    SWAGGER_URL,
+    API_URL,
+    config={"app_name": "Frida Kahlo Conversation API"},  # Swagger UI config overrides
+)
+
+# Register blueprint at URL
+app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
+
+# Create directory for static files if it doesn't exist
+os.makedirs(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "static"), exist_ok=True
+)
+
+# Create a swagger.json file
+swagger_json = """
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Frida Kahlo Conversation API",
+    "description": "API for conversing with Frida Kahlo AI character",
+    "version": "1.0.0"
+  },
+  "host": "localhost:5001",
+  "basePath": "/",
+  "schemes": [
+    "http"
+  ],
+  "paths": {
+    "/start_session": {
+      "post": {
+        "summary": "Start a new conversation session",
+        "produces": ["application/json"],
+        "responses": {
+          "200": {
+            "description": "Session started successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "session_id": {"type": "string"},
+                "welcome_text": {"type": "string"},
+                "welcome_audio": {"type": "string"},
+                "estimated_duration": {"type": "number"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transcribe": {
+      "post": {
+        "summary": "Transcribe audio to text",
+        "consumes": ["multipart/form-data"],
+        "parameters": [
+          {
+            "name": "audio",
+            "in": "formData",
+            "description": "Audio file to transcribe",
+            "required": true,
+            "type": "file"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcription successful",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "text": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/get_filler": {
+      "post": {
+        "summary": "Get a random filler statement",
+        "produces": ["application/json"],
+        "responses": {
+          "200": {
+            "description": "Filler retrieved successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "text": {"type": "string"},
+                "audio_base64": {"type": "string"},
+                "estimated_duration": {"type": "number"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/get_response": {
+      "post": {
+        "summary": "Start generating a response from Frida",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "text": {"type": "string"},
+                "session_id": {"type": "string"}
+              },
+              "required": ["text", "session_id"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response generation started",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/check_response": {
+      "post": {
+        "summary": "Check if a response is ready",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "session_id": {"type": "string"}
+              },
+              "required": ["session_id"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response status",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "completed": {"type": "boolean"},
+                "status": {"type": "string"},
+                "text": {"type": "string"},
+                "audio_base64": {"type": "string"},
+                "duration": {"type": "number"},
+                "phoneme_data": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "word": {"type": "string"},
+                      "start_time": {"type": "number"},
+                      "end_time": {"type": "number"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/end_session": {
+      "post": {
+        "summary": "End a conversation session",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "session_id": {"type": "string"}
+              },
+              "required": ["session_id"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session ended successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+# Write swagger.json to static directory
+swagger_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "static", "swagger.json"
+)
+with open(swagger_path, "w") as f:
+    f.write(swagger_json)
 
 # Get API key from environment variable
 api_key = os.environ.get("OPENAI_API_KEY")

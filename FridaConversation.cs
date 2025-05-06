@@ -104,29 +104,50 @@ public class FridaConversation : MonoBehaviour
     
     void Start()
     {
-        // Initialize UI elements
-        if (recordButton != null)
+        try
         {
-            recordButton.onClick.AddListener(ToggleRecording);
+            Debug.Log("Starting Frida Conversation...");
+            
+            // Initialize UI elements
+            if (recordButton != null)
+            {
+                recordButton.onClick.AddListener(ToggleRecording);
+                Debug.Log("Record button connected");
+            }
+            else
+            {
+                Debug.LogWarning("Record button not assigned!");
+            }
+            
+            if (endSessionButton != null)
+            {
+                endSessionButton.onClick.AddListener(EndSession);
+                Debug.Log("End session button connected");
+            }
+            else
+            {
+                Debug.LogWarning("End session button not assigned!");
+            }
+            
+            // Initialize AudioSource if not set
+            if (audioSource == null)
+            {
+                Debug.Log("Adding AudioSource component");
+                audioSource = gameObject.AddComponent<AudioSource>();
+            }
+            
+            // Start a new session
+            StartCoroutine(StartSession());
         }
-        
-        if (endSessionButton != null)
+        catch (System.Exception e)
         {
-            endSessionButton.onClick.AddListener(EndSession);
+            Debug.LogError($"Error in Start: {e.Message}");
         }
-        
-        // Initialize AudioSource if not set
-        if (audioSource == null)
-        {
-            audioSource = gameObject.AddComponent<AudioSource>();
-        }
-        
-        // Start a new session
-        StartCoroutine(StartSession());
     }
     
     private IEnumerator StartSession()
     {
+        Debug.Log("Starting Frida session...");
         string url = $"{serverUrl}/start_session";
         
         using (UnityWebRequest www = UnityWebRequest.Post(url, ""))
@@ -139,10 +160,14 @@ public class FridaConversation : MonoBehaviour
                 sessionId = response.session_id;
                 Debug.Log($"Session started with ID: {sessionId}");
                 
-                // Display welcome message
+                // Display welcome message - add null check
                 if (responseText != null)
                 {
                     responseText.text = response.welcome_text;
+                }
+                else
+                {
+                    Debug.Log("Welcome message: " + response.welcome_text);
                 }
                 
                 // Play welcome audio
@@ -449,67 +474,90 @@ public class FridaConversation : MonoBehaviour
     
     private IEnumerator PlayFiller()
     {
-        string url = $"{serverUrl}/get_filler";
-        
-        using (UnityWebRequest www = UnityWebRequest.Post(url, ""))
+        try
         {
-            yield return www.SendWebRequest();
+            string url = $"{serverUrl}/get_filler";
             
-            if (www.result == UnityWebRequest.Result.Success)
+            using (UnityWebRequest www = UnityWebRequest.Post(url, ""))
             {
-                FillerResponse response = JsonUtility.FromJson<FillerResponse>(www.downloadHandler.text);
+                yield return www.SendWebRequest();
                 
-                // Convert base64 to audio and play
-                byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
-                PlayAudioFromBytes(audioBytes, response.text, response.estimated_duration);
+                if (www.result == UnityWebRequest.Result.Success)
+                {
+                    FillerResponse response = JsonUtility.FromJson<FillerResponse>(www.downloadHandler.text);
+                    
+                    // Convert base64 to audio and play
+                    if (!string.IsNullOrEmpty(response.audio_base64))
+                    {
+                        byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
+                        PlayAudioFromBytes(audioBytes, response.text, response.estimated_duration);
+                    }
+                    else
+                    {
+                        Debug.LogWarning("No audio in filler response");
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"Failed to get filler: {www.error}");
+                }
             }
-            else
-            {
-                Debug.LogError($"Failed to get filler: {www.error}");
-            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in PlayFiller: {e.Message}");
         }
     }
     
     private IEnumerator GetFridaResponse(string userText)
     {
-        isProcessingResponse = true;
-        isWaitingForResponse = true;
-        
-        string url = $"{serverUrl}/get_response";
-        
-        // Create the request body using Unity's JsonUtility
-        TextRequestData requestData = new TextRequestData
+        try
         {
-            text = userText,
-            session_id = sessionId
-        };
-        
-        string jsonData = JsonUtility.ToJson(requestData);
-        byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
-        
-        using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
-        {
-            www.uploadHandler = new UploadHandlerRaw(bodyRaw);
-            www.downloadHandler = new DownloadHandlerBuffer();
-            www.SetRequestHeader("Content-Type", "application/json");
+            isProcessingResponse = true;
+            isWaitingForResponse = true;
             
-            yield return www.SendWebRequest();
+            string url = $"{serverUrl}/get_response";
             
-            if (www.result == UnityWebRequest.Result.Success)
+            // Create the request body using Unity's JsonUtility
+            TextRequestData requestData = new TextRequestData
             {
-                // Start checking for response completion
-                checkResponseCoroutine = StartCoroutine(CheckResponseStatus());
-            }
-            else
+                text = userText,
+                session_id = sessionId
+            };
+            
+            string jsonData = JsonUtility.ToJson(requestData);
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+            
+            using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
             {
-                Debug.LogError($"Failed to start response generation: {www.error}");
-                if (responseText != null)
+                www.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                www.downloadHandler = new DownloadHandlerBuffer();
+                www.SetRequestHeader("Content-Type", "application/json");
+                
+                yield return www.SendWebRequest();
+                
+                if (www.result == UnityWebRequest.Result.Success)
                 {
-                    responseText.text = "Error: Could not get Frida's response";
+                    // Start checking for response completion
+                    checkResponseCoroutine = StartCoroutine(CheckResponseStatus());
                 }
-                isProcessingResponse = false;
-                isWaitingForResponse = false;
+                else
+                {
+                    Debug.LogError($"Failed to start response generation: {www.error}");
+                    if (responseText != null)
+                    {
+                        responseText.text = "Error: Could not get Frida's response";
+                    }
+                    isProcessingResponse = false;
+                    isWaitingForResponse = false;
+                }
             }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in GetFridaResponse: {e.Message}");
+            isProcessingResponse = false;
+            isWaitingForResponse = false;
         }
     }
     
@@ -549,15 +597,26 @@ public class FridaConversation : MonoBehaviour
                     {
                         isComplete = true;
                         
-                        // Update UI with Frida's text response
+                        // Update UI with Frida's text response - add null check
                         if (responseText != null)
                         {
                             responseText.text = response.text;
                         }
+                        else
+                        {
+                            Debug.Log("Frida response: " + response.text);
+                        }
                         
-                        // Convert base64 to audio and play with SALSA lip sync data
-                        byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
-                        PlayAudioFromBytes(audioBytes, response.text, response.duration, response.phoneme_data);
+                        // Convert base64 to audio and play
+                        if (!string.IsNullOrEmpty(response.audio_base64))
+                        {
+                            byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
+                            PlayAudioFromBytes(audioBytes, response.text, response.duration);
+                        }
+                        else
+                        {
+                            Debug.LogWarning("No audio received in response");
+                        }
                         break;
                     }
                 }
@@ -581,41 +640,112 @@ public class FridaConversation : MonoBehaviour
         isWaitingForResponse = false;
     }
     
-    private void PlayAudioFromBytes(byte[] audioBytes, string text, float duration, PhonemeData[] phonemeData = null)
+    private void PlayAudioFromBytes(byte[] audioBytes, string text, float estimatedDuration = 0)
     {
-        // Save to temporary file (Unity can't create AudioClip directly from MP3 bytes)
-        string tempPath = Path.Combine(Application.temporaryCachePath, "frida_response.mp3");
-        File.WriteAllBytes(tempPath, audioBytes);
-        
-        StartCoroutine(PlayAudioFromFile(tempPath, text, duration, phonemeData));
-    }
-    
-    private IEnumerator PlayAudioFromFile(string filePath, string text, float duration, PhonemeData[] phonemeData = null)
-    {
-        using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.MPEG))
+        try
         {
-            yield return www.SendWebRequest();
-            
-            if (www.result == UnityWebRequest.Result.Success)
+            if (audioSource == null)
             {
-                AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
-                audioSource.clip = clip;
-                audioSource.Play();
-                
-                // Handle SALSA lip sync
-                if (salsaComponent != null && phonemeData != null)
-                {
-                    SetupSalsaLipSync(text, duration, phonemeData);
-                }
-                
-                // Clean up temp file after playing
-                yield return new WaitForSeconds(clip.length);
-                File.Delete(filePath);
+                Debug.LogError("AudioSource is null. Cannot play audio.");
+                return;
+            }
+
+            // Convert to WAV format
+            int channels = 1;
+            int sampleRate = 24000; // OpenAI uses 24kHz for speech audio
+            
+            // Create the audio clip from PCM data
+            AudioClip clip = AudioClip.Create("Speech", audioBytes.Length / 2, channels, sampleRate, false);
+            
+            // Convert audio bytes to float array
+            float[] samples = new float[audioBytes.Length / 2];
+            for (int i = 0; i < samples.Length; i++)
+            {
+                short sample = (short)((audioBytes[i * 2 + 1] << 8) | audioBytes[i * 2]);
+                samples[i] = sample / 32768.0f;
+            }
+            
+            // Set the samples to the clip
+            clip.SetData(samples, 0);
+            
+            // Play the clip
+            audioSource.clip = clip;
+            audioSource.Play();
+            
+            // Update the UI with the text
+            if (responseText != null)
+            {
+                responseText.text = text;
             }
             else
             {
-                Debug.LogError($"Error loading audio: {www.error}");
+                Debug.Log("Response text: " + text);
             }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error playing audio from bytes: {e.Message}");
+        }
+    }
+    
+    private void PlayAudioFromFile(string filePath, string text)
+    {
+        try
+        {
+            if (audioSource == null)
+            {
+                Debug.LogError("AudioSource is null. Cannot play audio.");
+                return;
+            }
+            
+            // Start a coroutine to load the audio file
+            StartCoroutine(LoadAndPlayAudio(filePath, text));
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error playing audio from file: {e.Message}");
+        }
+    }
+    
+    private IEnumerator LoadAndPlayAudio(string filePath, string text)
+    {
+        try
+        {
+            if (audioSource == null)
+            {
+                Debug.LogError("AudioSource is null. Cannot load and play audio.");
+                yield break;
+            }
+            
+            using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.WAV))
+            {
+                yield return www.SendWebRequest();
+                
+                if (www.result == UnityWebRequest.Result.Success)
+                {
+                    AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                    audioSource.clip = clip;
+                    audioSource.Play();
+                    
+                    // Update the UI with the text
+                    if (responseText != null)
+                    {
+                        responseText.text = text;
+                    }
+                    else
+                    {
+                        Debug.Log("Response text: " + text);
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"Failed to load audio file: {www.error}");
+                }
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in LoadAndPlayAudio: {e.Message}");
         }
     }
     

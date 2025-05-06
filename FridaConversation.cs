@@ -6,7 +6,8 @@ using System.Collections.Generic;
 using UnityEngine.Networking;
 using System.Text;
 using System.IO;
-using Newtonsoft.Json;
+// Replace Newtonsoft.Json with Unity's built-in SimpleJSON
+// using Newtonsoft.Json;
 
 // Add this if you have SALSA in your project
 // using CrazyMinnow.SALSA;
@@ -85,6 +86,20 @@ public class FridaConversation : MonoBehaviour
         public string word;
         public float start_time;
         public float end_time;
+    }
+    
+    // Request data classes
+    [Serializable]
+    private class TextRequestData
+    {
+        public string text;
+        public string session_id;
+    }
+    
+    [Serializable]
+    private class SessionRequestData
+    {
+        public string session_id;
     }
     
     void Start()
@@ -381,14 +396,14 @@ public class FridaConversation : MonoBehaviour
         
         string url = $"{serverUrl}/get_response";
         
-        // Create the request body
-        Dictionary<string, string> requestData = new Dictionary<string, string>
+        // Create the request body using Unity's JsonUtility
+        TextRequestData requestData = new TextRequestData
         {
-            { "text", userText },
-            { "session_id", sessionId }
+            text = userText,
+            session_id = sessionId
         };
         
-        string jsonData = JsonConvert.SerializeObject(requestData);
+        string jsonData = JsonUtility.ToJson(requestData);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
         
         using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
@@ -421,12 +436,13 @@ public class FridaConversation : MonoBehaviour
     {
         string url = $"{serverUrl}/check_response";
         
-        Dictionary<string, string> requestData = new Dictionary<string, string>
+        // Create the request body using Unity's JsonUtility
+        SessionRequestData requestData = new SessionRequestData
         {
-            { "session_id", sessionId }
+            session_id = sessionId
         };
         
-        string jsonData = JsonConvert.SerializeObject(requestData);
+        string jsonData = JsonUtility.ToJson(requestData);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
         
         // Poll until response is complete or error occurs
@@ -571,12 +587,13 @@ public class FridaConversation : MonoBehaviour
     {
         string url = $"{serverUrl}/end_session";
         
-        Dictionary<string, string> requestData = new Dictionary<string, string>
+        // Create the request body using Unity's JsonUtility
+        SessionRequestData requestData = new SessionRequestData
         {
-            { "session_id", sessionId }
+            session_id = sessionId
         };
         
-        string jsonData = JsonConvert.SerializeObject(requestData);
+        string jsonData = JsonUtility.ToJson(requestData);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
         
         using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
@@ -662,5 +679,4 @@ public class FridaConversation : MonoBehaviour
             StopCoroutine(dynamicRecordingCoroutine);
         }
     }
-} 
 } 

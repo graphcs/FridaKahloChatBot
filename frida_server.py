@@ -1,12 +1,18 @@
-from flask import Flask, request, jsonify, send_file
+# Ensure proper encoding for non-ASCII characters
+import sys
 import os
-import tempfile
-import base64
-from openai import OpenAI
-import time
-import random
-import threading
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
+from flask import Flask, request, jsonify, send_file
 from flask_swagger_ui import get_swaggerui_blueprint
+from openai import OpenAI
+import base64
+import tempfile
+import time
+import threading
+import random
 
 app = Flask(__name__)
 
@@ -232,6 +238,12 @@ with open(swagger_path, "w") as f:
 # Get API key from environment variable
 api_key = os.environ.get("OPENAI_API_KEY")
 if not api_key:
+    # Print bright red warning
+    print("\033[91m" + "*" * 80)
+    print("ERROR: OPENAI_API_KEY environment variable is not set!")
+    print("Please set your OpenAI API key using:")
+    print("export OPENAI_API_KEY=your_api_key_here")
+    print("*" * 80 + "\033[0m")
     raise ValueError(
         "No API key found. Please set the OPENAI_API_KEY environment variable."
     )

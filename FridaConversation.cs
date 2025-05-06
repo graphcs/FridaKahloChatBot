@@ -185,108 +185,150 @@ public class FridaConversation : MonoBehaviour
     {
         isRecording = true;
         
-        // Update UI
+        // Update UI - Add null check for Text component
         if (recordButton != null)
         {
-            recordButton.GetComponentInChildren<Text>().text = "Recording...";
-        }
-        
-        int sampleRate = 44100;
-        recordingClip = Microphone.Start(null, false, 30, sampleRate); // Max 30 seconds
-        
-        float[] samples = new float[1024];
-        int startPosition = 0;
-        float silenceTime = 0f;
-        bool hasSpeechStarted = false;
-        
-        Debug.Log("Dynamic recording started, waiting for speech...");
-        
-        while (isRecording)
-        {
-            int currentPosition = Microphone.GetPosition(null);
-            if (currentPosition < startPosition) currentPosition = recordingClip.samples;
-            
-            int diff = currentPosition - startPosition;
-            if (diff < samples.Length) 
+            Text buttonText = recordButton.GetComponentInChildren<Text>();
+            if (buttonText != null)
             {
-                yield return null;
-                continue;
-            }
-            
-            recordingClip.GetData(samples, startPosition % recordingClip.samples);
-            startPosition = (startPosition + samples.Length) % recordingClip.samples;
-            
-            // Calculate volume/energy in the sample
-            float sum = 0;
-            for (int i = 0; i < samples.Length; i++)
-            {
-                sum += Mathf.Abs(samples[i]);
-            }
-            float rms = sum / samples.Length;
-            
-            // Check if speech started
-            if (!hasSpeechStarted)
-            {
-                if (rms > silenceThreshold)
-                {
-                    hasSpeechStarted = true;
-                    Debug.Log("Speech detected!");
-                }
+                buttonText.text = "Recording...";
             }
             else
             {
-                // Check for silence
-                if (rms < silenceThreshold)
+                Debug.LogWarning("Record button does not have a Text component child");
+            }
+        }
+        
+        // Check if microphone is available
+        if (Microphone.devices.Length == 0)
+        {
+            Debug.LogError("No microphone detected. Please connect a microphone.");
+            isRecording = false;
+            return null;
+        }
+        
+        try
+        {
+            int sampleRate = 44100;
+            recordingClip = Microphone.Start(null, false, 30, sampleRate); // Max 30 seconds
+            
+            if (recordingClip == null)
+            {
+                Debug.LogError("Failed to start microphone recording");
+                isRecording = false;
+                return null;
+            }
+            
+            float[] samples = new float[1024];
+            int startPosition = 0;
+            float silenceTime = 0f;
+            bool hasSpeechStarted = false;
+            
+            Debug.Log("Dynamic recording started, waiting for speech...");
+            
+            while (isRecording)
+            {
+                int currentPosition = Microphone.GetPosition(null);
+                if (currentPosition < startPosition) currentPosition = recordingClip.samples;
+                
+                int diff = currentPosition - startPosition;
+                if (diff < samples.Length) 
                 {
-                    silenceTime += samples.Length / (float)sampleRate;
-                    if (silenceTime >= silenceTimeToStop)
+                    yield return null;
+                    continue;
+                }
+                
+                recordingClip.GetData(samples, startPosition % recordingClip.samples);
+                startPosition = (startPosition + samples.Length) % recordingClip.samples;
+                
+                // Calculate volume/energy in the sample
+                float sum = 0;
+                for (int i = 0; i < samples.Length; i++)
+                {
+                    sum += Mathf.Abs(samples[i]);
+                }
+                float rms = sum / samples.Length;
+                
+                // Check if speech started
+                if (!hasSpeechStarted)
+                {
+                    if (rms > silenceThreshold)
                     {
-                        Debug.Log("Silence detected, stopping recording");
-                        break;
+                        hasSpeechStarted = true;
+                        Debug.Log("Speech detected!");
                     }
                 }
                 else
                 {
-                    silenceTime = 0;
+                    // Check for silence
+                    if (rms < silenceThreshold)
+                    {
+                        silenceTime += samples.Length / (float)sampleRate;
+                        if (silenceTime >= silenceTimeToStop)
+                        {
+                            Debug.Log("Silence detected, stopping recording");
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        silenceTime = 0;
+                    }
+                }
+                
+                yield return null;
+            }
+            
+            // Stop recording
+            Microphone.End(null);
+            Debug.Log("Recording finished");
+            
+            if (!hasSpeechStarted)
+            {
+                Debug.Log("No speech detected, aborting");
+                isRecording = false;
+                if (recordButton != null)
+                {
+                    Text buttonText = recordButton.GetComponentInChildren<Text>();
+                    if (buttonText != null)
+                    {
+                        buttonText.text = "Record";
+                    }
+                }
+                yield break;
+            }
+            
+            // Update UI - Add null check for Text component
+            if (recordButton != null)
+            {
+                Text buttonText = recordButton.GetComponentInChildren<Text>();
+                if (buttonText != null)
+                {
+                    buttonText.text = "Processing...";
                 }
             }
             
-            yield return null;
+            // Convert AudioClip to WAV
+            byte[] wavData = AudioClipToWav(recordingClip);
+            
+            // Send to server for transcription
+            yield return StartCoroutine(TranscribeAudio(wavData));
         }
-        
-        // Stop recording
-        Microphone.End(null);
-        Debug.Log("Recording finished");
-        
-        if (!hasSpeechStarted)
+        catch (System.Exception e)
         {
-            Debug.Log("No speech detected, aborting");
-            isRecording = false;
-            if (recordButton != null)
-            {
-                recordButton.GetComponentInChildren<Text>().text = "Record";
-            }
-            yield break;
+            Debug.LogError($"Error during dynamic recording: {e.Message}");
         }
-        
-        // Update UI
-        if (recordButton != null)
-        {
-            recordButton.GetComponentInChildren<Text>().text = "Processing...";
-        }
-        
-        // Convert AudioClip to WAV
-        byte[] wavData = AudioClipToWav(recordingClip);
-        
-        // Send to server for transcription
-        yield return StartCoroutine(TranscribeAudio(wavData));
         
         isRecording = false;
         
-        // Update UI
+        // Update UI - Add null check for Text component
         if (recordButton != null)
         {
-            recordButton.GetComponentInChildren<Text>().text = "Record";
+            Text buttonText = recordButton.GetComponentInChildren<Text>();
+            if (buttonText != null)
+            {
+                buttonText.text = "Record";
+            }
         }
     }
     
@@ -294,41 +336,80 @@ public class FridaConversation : MonoBehaviour
     {
         isRecording = true;
         
-        // Update UI
+        // Update UI - Add null check for Text component
         if (recordButton != null)
         {
-            recordButton.GetComponentInChildren<Text>().text = "Recording...";
+            Text buttonText = recordButton.GetComponentInChildren<Text>();
+            if (buttonText != null)
+            {
+                buttonText.text = "Recording...";
+            }
+            else
+            {
+                Debug.LogWarning("Record button does not have a Text component child");
+            }
         }
         
-        // Start recording
-        recordingClip = Microphone.Start(null, false, recordingDuration, 44100);
-        Debug.Log($"Recording for {recordingDuration} seconds...");
-        
-        // Wait for the recording to complete
-        yield return new WaitForSeconds(recordingDuration);
-        
-        // Stop recording
-        Microphone.End(null);
-        Debug.Log("Recording finished");
-        
-        // Update UI
-        if (recordButton != null)
+        // Check if microphone is available
+        if (Microphone.devices.Length == 0)
         {
-            recordButton.GetComponentInChildren<Text>().text = "Processing...";
+            Debug.LogError("No microphone detected. Please connect a microphone.");
+            isRecording = false;
+            return null;
         }
         
-        // Convert AudioClip to WAV
-        byte[] wavData = AudioClipToWav(recordingClip);
-        
-        // Send to server for transcription
-        yield return StartCoroutine(TranscribeAudio(wavData));
+        try
+        {
+            // Start recording
+            recordingClip = Microphone.Start(null, false, recordingDuration, 44100);
+            
+            if (recordingClip == null)
+            {
+                Debug.LogError("Failed to start microphone recording");
+                isRecording = false;
+                return null;
+            }
+            
+            Debug.Log($"Recording for {recordingDuration} seconds...");
+            
+            // Wait for the recording to complete
+            yield return new WaitForSeconds(recordingDuration);
+            
+            // Stop recording
+            Microphone.End(null);
+            Debug.Log("Recording finished");
+            
+            // Update UI - Add null check for Text component
+            if (recordButton != null)
+            {
+                Text buttonText = recordButton.GetComponentInChildren<Text>();
+                if (buttonText != null)
+                {
+                    buttonText.text = "Processing...";
+                }
+            }
+            
+            // Convert AudioClip to WAV
+            byte[] wavData = AudioClipToWav(recordingClip);
+            
+            // Send to server for transcription
+            yield return StartCoroutine(TranscribeAudio(wavData));
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error during recording: {e.Message}");
+        }
         
         isRecording = false;
         
-        // Update UI
+        // Update UI - Add null check for Text component
         if (recordButton != null)
         {
-            recordButton.GetComponentInChildren<Text>().text = "Record";
+            Text buttonText = recordButton.GetComponentInChildren<Text>();
+            if (buttonText != null)
+            {
+                buttonText.text = "Record";
+            }
         }
     }
     

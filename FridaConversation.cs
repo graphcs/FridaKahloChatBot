@@ -20,9 +20,11 @@ public class FridaConversation : MonoBehaviour
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private int recordingDuration = 5;
     
-    // SALSA lip sync support
+    // SALSA lip sync support - commented out to avoid errors
+    /*
     [Tooltip("Reference to the Salsa component on your character")]
     [SerializeField] private MonoBehaviour salsaComponent; // Change to Salsa3D when you've added SALSA
+    */
     
     // Microphone settings
     [SerializeField] private bool useDynamicListening = false;
@@ -153,7 +155,7 @@ public class FridaConversation : MonoBehaviour
         
         try
         {
-            www = UnityWebRequest.Post(url, "");
+            www = UnityWebRequest.PostWwwForm(url, "");
         }
         catch (System.Exception e)
         {
@@ -592,7 +594,7 @@ public class FridaConversation : MonoBehaviour
         
         try
         {
-            www = UnityWebRequest.Post(url, "");
+            www = UnityWebRequest.PostWwwForm(url, "");
         }
         catch (System.Exception e)
         {
@@ -612,8 +614,22 @@ public class FridaConversation : MonoBehaviour
                 // Convert base64 to audio and play
                 if (!string.IsNullOrEmpty(response.audio_base64))
                 {
-                    byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
-                    PlayAudioFromBytes(audioBytes, response.text, response.estimated_duration);
+                    try {
+                        Debug.Log($"Received filler audio data, length: {response.audio_base64.Length} characters");
+                        byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
+                        Debug.Log($"Decoded filler audio data size: {audioBytes.Length} bytes");
+                        
+                        // Check file signature (first few bytes)
+                        if (audioBytes.Length > 4) {
+                            string signature = System.Text.Encoding.ASCII.GetString(audioBytes, 0, 4);
+                            Debug.Log($"Filler audio data signature: {signature}");
+                        }
+                        
+                        PlayAudioFromBytes(audioBytes, response.text, response.estimated_duration);
+                    }
+                    catch (System.Exception e) {
+                        Debug.LogError($"Error processing filler audio data: {e.Message}");
+                    }
                 }
                 else
                 {
@@ -750,11 +766,39 @@ public class FridaConversation : MonoBehaviour
                         // Log Frida's text response
                         Debug.Log("Frida response: " + response.text);
                         
-                        // Convert base64 to audio and play
-                        if (!string.IsNullOrEmpty(response.audio_base64))
+                        // Check if the server supports direct audio download
+                        if (sessionId != null)
                         {
-                            byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
-                            PlayAudioFromBytes(audioBytes, response.text, response.duration);
+                            // Try direct audio download first
+                            StartCoroutine(DownloadAudioDirectly(sessionId, response.text, response.duration));
+                        }
+                        // Fall back to base64 if direct download not available or fails
+                        else if (!string.IsNullOrEmpty(response.audio_base64))
+                        {
+                            try {
+                                Debug.Log($"Received audio data, length: {response.audio_base64.Length} characters, estimated duration: {response.duration}s");
+                                byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
+                                Debug.Log($"Decoded audio data size: {audioBytes.Length} bytes");
+                                
+                                // Check file signature (first few bytes)
+                                string signature = "";
+                                if (audioBytes.Length > 4) {
+                                    signature = System.Text.Encoding.ASCII.GetString(audioBytes, 0, 4);
+                                    Debug.Log($"Audio data signature: {signature}");
+                                    
+                                    // Also log hex bytes for better diagnosis
+                                    if (audioBytes.Length > 16) {
+                                        string hexHeader = BitConverter.ToString(audioBytes, 0, 16).Replace("-", " ");
+                                        Debug.Log($"Audio header bytes: {hexHeader}");
+                                    }
+                                }
+                                
+                                // Try direct playback first to avoid any file system issues
+                                StartCoroutine(TryDirectAudioPlayback(audioBytes, response.text, response.duration));
+                            }
+                            catch (System.Exception e) {
+                                Debug.LogError($"Error processing audio data: {e.Message}");
+                            }
                         }
                         else
                         {
@@ -797,6 +841,200 @@ public class FridaConversation : MonoBehaviour
         isWaitingForResponse = false;
     }
     
+    private IEnumerator DownloadAudioDirectly(string sessionId, string text, float duration)
+    {
+        // Build URL to download audio directly as MP3 instead of base64
+        string directAudioUrl = $"{serverUrl}/get_audio?session_id={sessionId}";
+        Debug.Log($"Attempting to download audio directly from: {directAudioUrl}");
+        
+        // Create request using DownloadHandlerAudioClip to handle audio directly
+        UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(directAudioUrl, AudioType.MPEG);
+        
+        yield return www.SendWebRequest();
+        
+        if (www.result == UnityWebRequest.Result.Success)
+        {
+            try
+            {
+                AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                if (clip != null)
+                {
+                    Debug.Log($"Successfully downloaded audio directly! Samples: {clip.samples}, Frequency: {clip.frequency}, Channels: {clip.channels}");
+                    audioSource.clip = clip;
+                    audioSource.Play();
+                    
+                    // Also try SALSA lip sync if available
+                    // SetupSalsaLipSync(text, duration, null);  // Commented out to avoid SALSA errors
+                }
+                else
+                {
+                    Debug.LogError("Downloaded audio clip is null");
+                    // Try alternative methods
+                    StartCoroutine(FallbackGetResponseAudio(sessionId, text, duration));
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Error playing direct downloaded audio: {e.Message}");
+                // Try alternative methods
+                StartCoroutine(FallbackGetResponseAudio(sessionId, text, duration));
+            }
+        }
+        else
+        {
+            Debug.LogError($"Failed to download audio directly: {www.error}");
+            // Try alternative methods
+            StartCoroutine(FallbackGetResponseAudio(sessionId, text, duration));
+        }
+        
+        www.Dispose();
+    }
+    
+    private IEnumerator FallbackGetResponseAudio(string sessionId, string text, float duration)
+    {
+        // This is a fallback method to try to get the audio in a simpler format like WAV
+        string url = $"{serverUrl}/get_response_audio";
+        
+        // Create the request body
+        string jsonData = JsonUtility.ToJson(new SessionRequestData { session_id = sessionId });
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+        
+        UnityWebRequest www = new UnityWebRequest(url, "POST");
+        www.uploadHandler = new UploadHandlerRaw(bodyRaw);
+        www.downloadHandler = new DownloadHandlerBuffer();
+        www.SetRequestHeader("Content-Type", "application/json");
+        
+        yield return www.SendWebRequest();
+        
+        if (www.result == UnityWebRequest.Result.Success)
+        {
+            // Try to get a direct audio URL from response
+            if (www.downloadHandler.text.Contains("audio_url"))
+            {
+                try
+                {
+                    // Parse response to get direct URL
+                    string audioUrl = www.downloadHandler.text.Replace("\"", "").Replace("{", "").Replace("}", "").Split(':')[1].Trim();
+                    
+                    if (!string.IsNullOrEmpty(audioUrl))
+                    {
+                        Debug.Log($"Got fallback audio URL: {audioUrl}");
+                        
+                        // Download the audio file - moved outside try block
+                        StartCoroutine(DownloadAndPlayAudioFromURL(audioUrl, text));
+                    }
+                    else
+                    {
+                        Debug.LogError("Empty audio URL in fallback response");
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"Error parsing audio URL: {e.Message}");
+                }
+            }
+            else
+            {
+                Debug.LogError("No audio URL found in fallback response");
+            }
+        }
+        else
+        {
+            Debug.LogError($"Failed to get fallback response: {www.error}");
+        }
+        
+        www.Dispose();
+    }
+    
+    private IEnumerator DownloadAndPlayAudioFromURL(string audioUrl, string text)
+    {
+        // Download the audio file
+        UnityWebRequest audioWww = UnityWebRequestMultimedia.GetAudioClip(audioUrl, AudioType.MPEG);
+        yield return audioWww.SendWebRequest();
+        
+        try 
+        {
+            if (audioWww.result == UnityWebRequest.Result.Success)
+            {
+                AudioClip clip = DownloadHandlerAudioClip.GetContent(audioWww);
+                if (clip != null)
+                {
+                    audioSource.clip = clip;
+                    audioSource.Play();
+                    Debug.Log("Successfully played fallback audio!");
+                }
+                else
+                {
+                    Debug.LogError("Downloaded audio clip is null");
+                }
+            }
+            else
+            {
+                Debug.LogError($"Failed to get fallback audio: {audioWww.error}");
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error playing fallback audio: {e.Message}");
+        }
+        finally 
+        {
+            audioWww.Dispose();
+        }
+    }
+    
+    private IEnumerator TryDirectAudioPlayback(byte[] audioBytes, string text, float duration)
+    {
+        Debug.Log("Attempting direct audio playback from memory...");
+        
+        // Create a direct request with the audio data
+        UnityWebRequest www = new UnityWebRequest();
+        www.url = "data:audio/mp3;base64," + Convert.ToBase64String(audioBytes);
+        www.downloadHandler = new DownloadHandlerAudioClip(www.url, AudioType.MPEG);
+        www.method = UnityWebRequest.kHttpVerbGET;
+        
+        // Send the request
+        yield return www.SendWebRequest();
+        
+        bool success = false;
+        
+        if (www.result == UnityWebRequest.Result.Success)
+        {
+            try
+            {
+                AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                if (clip != null)
+                {
+                    audioSource.clip = clip;
+                    audioSource.Play();
+                    Debug.Log("Successfully played audio directly from memory!");
+                    success = true;
+                }
+                else
+                {
+                    Debug.LogError("Downloaded audio clip is null");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Error playing direct audio: {e.Message}");
+            }
+        }
+        else
+        {
+            Debug.LogError($"Direct audio request failed: {www.error}");
+        }
+        
+        www.Dispose();
+        
+        // If direct approach failed, fall back to file-based method
+        if (!success)
+        {
+            Debug.Log("Direct playback failed, falling back to file-based method");
+            PlayAudioFromBytes(audioBytes, text, duration);
+        }
+    }
+    
     private void PlayAudioFromBytes(byte[] audioBytes, string text, float estimatedDuration = 0)
     {
         try
@@ -807,27 +1045,44 @@ public class FridaConversation : MonoBehaviour
                 return;
             }
 
-            // Convert to WAV format
-            int channels = 1;
-            int sampleRate = 24000; // OpenAI uses 24kHz for speech audio
-            
-            // Create the audio clip from PCM data
-            AudioClip clip = AudioClip.Create("Speech", audioBytes.Length / 2, channels, sampleRate, false);
-            
-            // Convert audio bytes to float array
-            float[] samples = new float[audioBytes.Length / 2];
-            for (int i = 0; i < samples.Length; i++)
+            // First, try to save with specific MP3 header structure
+            try 
             {
-                short sample = (short)((audioBytes[i * 2 + 1] << 8) | audioBytes[i * 2]);
-                samples[i] = sample / 32768.0f;
+                // Need to ensure this is a proper MP3 file - check if it's missing an ID3 tag
+                if (audioBytes.Length > 2 && !(audioBytes[0] == 'I' && audioBytes[1] == 'D' && audioBytes[2] == '3') &&
+                    !(audioBytes[0] == 0xFF && (audioBytes[1] & 0xE0) == 0xE0))
+                {
+                    Debug.Log("Audio doesn't appear to have a proper MP3 header, adding MP3 sync header");
+                    
+                    // Add a minimal MP3 sync header (0xFF 0xFB) for constant bitrate MP3
+                    byte[] fixedMP3 = new byte[audioBytes.Length + 2];
+                    fixedMP3[0] = 0xFF;  // Sync word
+                    fixedMP3[1] = 0xFB;  // MPEG-1 Layer 3, no CRC
+                    Buffer.BlockCopy(audioBytes, 0, fixedMP3, 2, audioBytes.Length);
+                    audioBytes = fixedMP3;
+                    
+                    Debug.Log($"Fixed audio with MP3 header, new size: {audioBytes.Length} bytes");
+                }
             }
+            catch (Exception e)
+            {
+                Debug.LogError($"Error fixing MP3 header: {e.Message}");
+            }
+
+            // OpenAI TTS always returns MP3 format according to their documentation
+            string fileExtension = ".mp3"; 
             
-            // Set the samples to the clip
-            clip.SetData(samples, 0);
+            Debug.Log($"Using file extension: {fileExtension} for audio data of size: {audioBytes.Length} bytes");
+
+            // Create a temporary file with a unique name to avoid conflicts
+            string tempFileName = "frida_audio_" + DateTime.Now.Ticks + fileExtension;
+            string tempPath = Path.Combine(Application.temporaryCachePath, tempFileName);
+            File.WriteAllBytes(tempPath, audioBytes);
             
-            // Play the clip
-            audioSource.clip = clip;
-            audioSource.Play();
+            Debug.Log($"Saved audio to temporary file: {tempPath}");
+            
+            // Start coroutine to load and play the audio
+            StartCoroutine(LoadAndPlayAudioFromPath(tempPath, text));
             
             // Log the text
             Debug.Log("Response text: " + text);
@@ -835,6 +1090,314 @@ public class FridaConversation : MonoBehaviour
         catch (System.Exception e)
         {
             Debug.LogError($"Error playing audio from bytes: {e.Message}");
+        }
+    }
+    
+    private IEnumerator LoadAndPlayAudioFromPath(string filePath, string text)
+    {
+        Debug.Log($"Loading audio from path: {filePath}");
+        
+        // First try as MP3 since OpenAI TTS returns MP3 format
+        UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.MPEG);
+        Debug.Log("Attempting to load as MP3...");
+        yield return www.SendWebRequest();
+        
+        if (www.result == UnityWebRequest.Result.Success)
+        {
+            try
+            {
+                AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                Debug.Log($"MP3 audio loaded successfully. Samples: {clip.samples}, Frequency: {clip.frequency}, Channels: {clip.channels}");
+                audioSource.clip = clip;
+                audioSource.Play();
+                www.Dispose();
+                
+                // Clean up file after successful playback
+                StartCoroutine(DelayedFileDelete(filePath, 5.0f)); // Longer delay to ensure playback completes
+                yield break;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error processing MP3 content: {e.Message}");
+                www.Dispose();
+                // Continue to try other formats
+            }
+        }
+        else
+        {
+            Debug.LogError($"Failed to load as MP3: {www.error}. ResponseCode: {www.responseCode}");
+            Debug.LogError($"Detailed error: {www.downloadHandler?.error ?? "No detailed error"}");
+            www.Dispose();
+        }
+        
+        // Try as WAV
+        www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.WAV);
+        Debug.Log("Attempting to load as WAV...");
+        yield return www.SendWebRequest();
+        
+        if (www.result == UnityWebRequest.Result.Success)
+        {
+            try
+            {
+                AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                Debug.Log($"WAV audio loaded successfully. Samples: {clip.samples}, Frequency: {clip.frequency}, Channels: {clip.channels}");
+                audioSource.clip = clip;
+                audioSource.Play();
+                www.Dispose();
+                
+                // Clean up file after successful playback
+                StartCoroutine(DelayedFileDelete(filePath, 5.0f));
+                yield break;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error processing WAV content: {e.Message}");
+                www.Dispose();
+                // Continue to try other formats
+            }
+        }
+        else
+        {
+            Debug.LogError($"Failed to load as WAV: {www.error}");
+            www.Dispose();
+        }
+        
+        // Try as OGG
+        www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.OGGVORBIS);
+        Debug.Log("Attempting to load as OGG...");
+        yield return www.SendWebRequest();
+        
+        if (www.result == UnityWebRequest.Result.Success)
+        {
+            try
+            {
+                AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                Debug.Log($"OGG audio loaded successfully. Samples: {clip.samples}, Frequency: {clip.frequency}, Channels: {clip.channels}");
+                audioSource.clip = clip;
+                audioSource.Play();
+                www.Dispose();
+                
+                // Clean up file after successful playback
+                StartCoroutine(DelayedFileDelete(filePath, 5.0f));
+                yield break;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error processing OGG content: {e.Message}");
+                www.Dispose();
+                // Continue to fallback
+            }
+        }
+        else
+        {
+            Debug.LogError($"Failed to load as OGG: {www.error}");
+            www.Dispose();
+        }
+        
+        Debug.LogError("Failed to load audio with any format, trying alternative playback method...");
+        
+        // Fallback method - try direct file loading
+        StartCoroutine(TryDirectFilePlayback(filePath));
+    }
+    
+    private IEnumerator TryDirectFilePlayback(string filePath)
+    {
+        Debug.Log("Attempting direct file playback...");
+        
+        // First verify the file exists
+        if (!File.Exists(filePath))
+        {
+            Debug.LogError($"Audio file does not exist: {filePath}");
+            yield break;
+        }
+        
+        byte[] audioBytes = null;
+        string hexHeader = null;
+        
+        // Read file and gather diagnostics - keep try/catch blocks small with no yields
+        try
+        {
+            // Read the raw bytes for diagnostics
+            audioBytes = File.ReadAllBytes(filePath);
+            Debug.Log($"Raw audio file size: {audioBytes.Length} bytes");
+            
+            // Log the first few bytes for format identification
+            if (audioBytes.Length > 16)
+            {
+                hexHeader = BitConverter.ToString(audioBytes, 0, 16).Replace("-", " ");
+                Debug.Log($"File header bytes: {hexHeader}");
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error reading audio file: {e.Message}");
+            
+            // Try to clean up before exiting
+            try 
+            {
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+            }
+            catch {}
+            
+            yield break;
+        }
+        
+        // Now that we've read the file safely, try to decode it - no yields in try blocks
+        StartCoroutine(TryDecodeAudioDirectly(filePath));
+        
+        // Wait a bit to let the decoding attempt finish before continuing
+        yield return new WaitForSeconds(2.0f);
+    }
+    
+    private IEnumerator TryDecodeAudioDirectly(string filePath)
+    {
+        byte[] audioData = null;
+        
+        try
+        {
+            // Read the audio data from the temp file
+            audioData = File.ReadAllBytes(filePath);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error reading audio file: {e.Message}");
+            yield break;
+        }
+        
+        // Check if this actually contains OGG data
+        if (audioData.Length > 4 && audioData[0] == 'O' && audioData[1] == 'g' && audioData[2] == 'g' && audioData[3] == 'S')
+        {
+            // Try loading as OGG instead
+            UnityWebRequest www = null;
+            
+            try
+            {
+                www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.OGGVORBIS);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error creating OGG web request: {e.Message}");
+                yield break;
+            }
+            
+            // Move yield outside of try-catch
+            yield return www.SendWebRequest();
+            
+            bool success = false;
+            
+            try
+            {
+                if (www.result == UnityWebRequest.Result.Success)
+                {
+                    AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                    audioSource.clip = clip;
+                    audioSource.Play();
+                    success = true;
+                }
+                else
+                {
+                    Debug.LogError($"Failed to load audio as OGG: {www.error}");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error processing OGG audio: {e.Message}");
+            }
+            finally
+            {
+                www.Dispose();
+            }
+            
+            if (success)
+            {
+                yield break;
+            }
+        }
+        
+        try
+        {
+            // If we get here, we need to try parsing as WAV manually
+            // Skip WAV header (44 bytes) to get to PCM data
+            int headerSize = 44;
+            if (audioData.Length <= headerSize)
+            {
+                Debug.LogError("Audio data too short to be valid WAV");
+                yield break;
+            }
+            
+            // Extract sample rate from WAV header (bytes 24-27)
+            int sampleRate = audioData[24] | (audioData[25] << 8) | (audioData[26] << 16) | (audioData[27] << 24);
+            
+            // Extract number of channels from WAV header (bytes 22-23)
+            int channels = audioData[22] | (audioData[23] << 8);
+            
+            // Get audio format (bytes 20-21), 1 = PCM
+            int audioFormat = audioData[20] | (audioData[21] << 8);
+            
+            // Get bits per sample (bytes 34-35)
+            int bitsPerSample = audioData[34] | (audioData[35] << 8);
+            
+            Debug.Log($"WAV info: Format={audioFormat}, Channels={channels}, Rate={sampleRate}, BitsPerSample={bitsPerSample}");
+            
+            if (audioFormat != 1)
+            {
+                Debug.LogError("Only PCM WAV format is supported for direct decoding");
+                yield break;
+            }
+            
+            // Calculate number of samples
+            int bytesPerSample = bitsPerSample / 8;
+            int numSamples = (audioData.Length - headerSize) / (bytesPerSample * channels);
+            
+            // Create audio clip
+            AudioClip clip = AudioClip.Create("Speech", numSamples, channels, sampleRate, false);
+            
+            // Convert PCM data to float samples
+            float[] samples = new float[numSamples * channels];
+            int sampleIndex = 0;
+            
+            for (int i = headerSize; i < audioData.Length; i += bytesPerSample)
+            {
+                if (sampleIndex >= samples.Length) break;
+                
+                if (bitsPerSample == 16)
+                {
+                    // 16-bit samples
+                    short sample = (short)((audioData[i+1] << 8) | audioData[i]);
+                    samples[sampleIndex++] = sample / 32768.0f;
+                }
+                else if (bitsPerSample == 8)
+                {
+                    // 8-bit samples
+                    samples[sampleIndex++] = (audioData[i] - 128) / 128.0f;
+                }
+            }
+            
+            // Set the audio data and play
+            clip.SetData(samples, 0);
+            audioSource.clip = clip;
+            audioSource.Play();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error in direct audio decoding: {e.Message}");
+        }
+        
+        // Finally, clean up the temp file
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                // Use the DelayedFileDelete coroutine instead of yielding within try block
+                StartCoroutine(DelayedFileDelete(filePath, 2.0f));
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error cleaning up temp file: {e.Message}");
         }
     }
     
@@ -903,45 +1466,78 @@ public class FridaConversation : MonoBehaviour
         finally
         {
             www.Dispose();
+            
+            // Clean up temp file
+            try
+            {
+                if (File.Exists(filePath))
+                {
+                    // Wait a bit before deleting to ensure it's not in use
+                    StartCoroutine(DelayedFileDelete(filePath, 2.0f));
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error setting up file cleanup: {e.Message}");
+            }
         }
     }
     
+    private IEnumerator DelayedFileDelete(string filePath, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+                Debug.Log($"Cleaned up temporary file: {filePath}");
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error deleting file: {e.Message}");
+        }
+    }
+    
+    /* Commented out SALSA integration to avoid errors
     private void SetupSalsaLipSync(string text, float duration, PhonemeData[] phonemeData)
     {
         // This method would integrate with SALSA
         // The exact implementation depends on your SALSA version and setup
         
-        /* Example SALSA integration - uncomment and adapt when you have SALSA
+        // Example SALSA integration - uncomment and adapt when you have SALSA
         
         // Assuming salsaComponent is a Salsa3D instance
-        Salsa3D salsa = salsaComponent as Salsa3D;
-        if (salsa != null)
-        {
-            // Set the audio clip the same as our AudioSource
-            salsa.SetAudioClip(audioSource.clip);
-            
-            // If you have advanced viseme controls, you can use the phoneme data
-            // to drive more precise lip sync by creating a custom SalsaVisemeMap
-            
-            // For advanced usage with phoneme data:
-            foreach (PhonemeData phoneme in phonemeData)
-            {
-                // Map word to appropriate viseme
-                // This would require converting words to phonemes & then to visemes
-                float startTime = phoneme.start_time;
-                float endTime = phoneme.end_time;
-                string word = phoneme.word;
-                
-                // Advanced integration would go here
-            }
-            
-            // Start lip sync
-            salsa.Play();
-        }
-        */
+        // Salsa3D salsa = salsaComponent as Salsa3D;
+        // if (salsa != null)
+        // {
+        //     // Set the audio clip the same as our AudioSource
+        //     salsa.SetAudioClip(audioSource.clip);
+        //     
+        //     // If you have advanced viseme controls, you can use the phoneme data
+        //     // to drive more precise lip sync by creating a custom SalsaVisemeMap
+        //     
+        //     // For advanced usage with phoneme data:
+        //     foreach (PhonemeData phoneme in phonemeData)
+        //     {
+        //         // Map word to appropriate viseme
+        //         // This would require converting words to phonemes & then to visemes
+        //         float startTime = phoneme.start_time;
+        //         float endTime = phoneme.end_time;
+        //         string word = phoneme.word;
+        //         
+        //         // Advanced integration would go here
+        //     }
+        //     
+        //     // Start lip sync
+        //     salsa.Play();
+        // }
         
         Debug.Log($"SALSA lip sync would be performed here for: {text} with duration: {duration}");
     }
+    */
     
     private void EndSession()
     {

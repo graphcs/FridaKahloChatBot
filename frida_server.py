@@ -5,7 +5,7 @@ os.environ['PYTHONIOENCODING'] = 'utf-8'
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, make_response
 from flask_swagger_ui import get_swaggerui_blueprint
 from openai import OpenAI
 import base64
@@ -220,6 +220,60 @@ swagger_json = """
                 "status": {"type": "string"}
               }
             }
+          }
+        }
+      }
+    },
+    "/get_audio": {
+      "get": {
+        "summary": "Download the most recent audio directly as MP3",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audio retrieved successfully",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "404": {
+            "description": "Audio not found"
+          }
+        }
+      }
+    },
+    "/get_response_audio": {
+      "post": {
+        "summary": "Alternative endpoint to get audio in WAV format",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audio URL retrieved successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "audio_url": {"type": "string"}
+              }
+            }
+          },
+          "404": {
+            "description": "Audio not found"
           }
         }
       }
@@ -523,6 +577,44 @@ def end_session():
         return jsonify({"status": "Session ended successfully"})
 
     return jsonify({"error": "Session not found"}), 404
+
+
+@app.route("/get_audio", methods=["GET"])
+def get_audio():
+    """Download the most recent audio directly as MP3."""
+    session_id = request.args.get('session_id')
+    
+    if not session_id or session_id not in response_threads:
+        return jsonify({"error": "No audio available for this session"}), 404
+    
+    # Get the audio from the response
+    _, result_dict = response_threads[session_id]
+    if not result_dict["completed"] or not result_dict["audio"]:
+        return jsonify({"error": "Audio not ready or unavailable"}), 404
+    
+    # Create a response with MP3 data
+    response = make_response(result_dict["audio"])
+    response.headers.set('Content-Type', 'audio/mpeg')
+    response.headers.set('Content-Disposition', 'attachment', filename='frida_response.mp3')
+    return response
+
+
+@app.route("/get_response_audio", methods=["POST"])
+def get_response_audio():
+    """Alternative endpoint to get audio in WAV format."""
+    data = request.json
+    session_id = data.get("session_id", "default")
+    
+    if session_id not in response_threads:
+        return jsonify({"error": "No response found for this session"}), 404
+    
+    _, result_dict = response_threads[session_id]
+    if not result_dict["completed"] or not result_dict["audio"]:
+        return jsonify({"error": "Audio not ready"}), 404
+    
+    # Serve the audio URL (could be modified to serve a WAV file instead)
+    temp_url = f"{serverUrl}/get_audio?session_id={session_id}"
+    return jsonify({"audio_url": temp_url})
 
 
 if __name__ == "__main__":

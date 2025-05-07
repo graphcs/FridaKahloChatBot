@@ -185,6 +185,60 @@
           }
         }
       }
+    },
+    "/get_audio": {
+      "get": {
+        "summary": "Download the most recent audio directly as MP3",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audio retrieved successfully",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "404": {
+            "description": "Audio not found"
+          }
+        }
+      }
+    },
+    "/get_response_audio": {
+      "post": {
+        "summary": "Alternative endpoint to get audio in WAV format",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audio URL retrieved successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "audio_url": {"type": "string"}
+              }
+            }
+          },
+          "404": {
+            "description": "Audio not found"
+          }
+        }
+      }
     }
   }
 }

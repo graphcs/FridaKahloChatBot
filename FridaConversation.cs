@@ -3,13 +3,14 @@ using UnityEngine.UI;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine.Networking;
 using System.Text;
 using System.IO;
 // Replace Newtonsoft.Json with Unity's built-in SimpleJSON
 // using Newtonsoft.Json;
 
-// Add this if you have SALSA in your project
+// Don't force SALSA import - let's use reflection instead
 // using CrazyMinnow.SALSA;
 
 public class FridaConversation : MonoBehaviour
@@ -20,11 +21,9 @@ public class FridaConversation : MonoBehaviour
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private int recordingDuration = 5;
     
-    // SALSA lip sync support - commented out to avoid errors
-    /*
+    // SALSA lip sync support - safe reference approach
     [Tooltip("Reference to the Salsa component on your character")]
-    [SerializeField] private MonoBehaviour salsaComponent; // Change to Salsa3D when you've added SALSA
-    */
+    [SerializeField] private MonoBehaviour salsaComponent; // Will be cast to SALSA if available
     
     // Microphone settings
     [SerializeField] private bool useDynamicListening = false;
@@ -864,6 +863,10 @@ public class FridaConversation : MonoBehaviour
                     Debug.Log("Successfully downloaded alternative audio");
                     audioSource.clip = clip;
                     audioSource.Play();
+                    
+                    // Set up SALSA lip sync with the alternative audio
+                    SetupSalsaLipSync(text, clip.length, null);
+                    
                     yield break;
                 }
             }
@@ -933,6 +936,10 @@ public class FridaConversation : MonoBehaviour
                     Debug.Log($"MP3 audio loaded successfully. Length: {clip.length}s, Samples: {clip.samples}, Channels: {clip.channels}");
                     audioSource.clip = clip;
                     audioSource.Play();
+                    
+                    // Try to set up SALSA lip sync with the new audio clip
+                    SetupSalsaLipSync(text, clip.length, null);
+                    
                     success = true;
                 }
                 else
@@ -971,6 +978,10 @@ public class FridaConversation : MonoBehaviour
                         Debug.Log($"WAV audio loaded as fallback. Length: {clip.length}s");
                         audioSource.clip = clip;
                         audioSource.Play();
+                        
+                        // Try to set up SALSA lip sync with the fallback audio
+                        SetupSalsaLipSync(text, clip.length, null);
+                        
                         success = true;
                     }
                 }
@@ -1107,43 +1118,141 @@ public class FridaConversation : MonoBehaviour
         }
     }
     
-    /* Commented out SALSA integration to avoid errors
+    /// <summary>
+    /// Sets up SALSA lip sync if the component is available.
+    /// This implementation uses only reflection to work with any SALSA version.
+    /// </summary>
     private void SetupSalsaLipSync(string text, float duration, PhonemeData[] phonemeData)
     {
-        // This method would integrate with SALSA
-        // The exact implementation depends on your SALSA version and setup
+        if (salsaComponent == null)
+        {
+            // No SALSA component assigned, nothing to do
+            Debug.LogWarning("SALSA component is not assigned! Assign your character's SALSA component in the Inspector.");
+            return;
+        }
         
-        // Example SALSA integration - uncomment and adapt when you have SALSA
-        
-        // Assuming salsaComponent is a Salsa3D instance
-        // Salsa3D salsa = salsaComponent as Salsa3D;
-        // if (salsa != null)
-        // {
-        //     // Set the audio clip the same as our AudioSource
-        //     salsa.SetAudioClip(audioSource.clip);
-        //     
-        //     // If you have advanced viseme controls, you can use the phoneme data
-        //     // to drive more precise lip sync by creating a custom SalsaVisemeMap
-        //     
-        //     // For advanced usage with phoneme data:
-        //     foreach (PhonemeData phoneme in phonemeData)
-        //     {
-        //         // Map word to appropriate viseme
-        //         // This would require converting words to phonemes & then to visemes
-        //         float startTime = phoneme.start_time;
-        //         float endTime = phoneme.end_time;
-        //         string word = phoneme.word;
-        //         
-        //         // Advanced integration would go here
-        //     }
-        //     
-        //     // Start lip sync
-        //     salsa.Play();
-        // }
-        
-        Debug.Log($"SALSA lip sync would be performed here for: {text} with duration: {duration}");
+        // Pure reflection-based approach to handle any SALSA version
+        try
+        {
+            // Get information about the component type
+            Type salsaType = salsaComponent.GetType();
+            Debug.Log($"Found SALSA component of type: {salsaType.FullName}");
+            
+            bool foundSetAudioClipMethod = false;
+            bool foundPlayMethod = false;
+            
+            // Different SALSA versions have different method signatures, so try several variations
+            
+            // First try: Try SetAudioClip(AudioClip)
+            var setAudioClipMethod = salsaType.GetMethod("SetAudioClip", 
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public, 
+                null, new Type[] { typeof(AudioClip) }, null);
+            
+            if (setAudioClipMethod != null)
+            {
+                foundSetAudioClipMethod = true;
+                Debug.Log("Found SALSA SetAudioClip(AudioClip) method");
+                
+                // Get the current audio clip
+                AudioClip currentClip = audioSource?.clip;
+                if (currentClip != null)
+                {
+                    Debug.Log($"Setting audio clip: {currentClip.name}, Length: {currentClip.length}s");
+                    setAudioClipMethod.Invoke(salsaComponent, new object[] { currentClip });
+                }
+                else
+                {
+                    Debug.LogWarning("No audio clip available for SALSA");
+                    return;
+                }
+            }
+            
+            // Second try: Try SetAudioSource(AudioSource)
+            if (!foundSetAudioClipMethod)
+            {
+                var setAudioSourceMethod = salsaType.GetMethod("SetAudioSource",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                    null, new Type[] { typeof(AudioSource) }, null);
+                
+                if (setAudioSourceMethod != null)
+                {
+                    foundSetAudioClipMethod = true;
+                    Debug.Log("Found SALSA SetAudioSource method instead");
+                    
+                    if (audioSource != null)
+                    {
+                        setAudioSourceMethod.Invoke(salsaComponent, new object[] { audioSource });
+                        Debug.Log("Set AudioSource directly on SALSA component");
+                    }
+                }
+            }
+            
+            // Try various Play methods
+            
+            // First try: Play() with no parameters
+            var playMethod = salsaType.GetMethod("Play", 
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                null, System.Type.EmptyTypes, null);
+            
+            if (playMethod != null)
+            {
+                foundPlayMethod = true;
+                playMethod.Invoke(salsaComponent, null);
+                Debug.Log("SALSA Play() method called");
+            }
+            
+            // Second try: StartAnalyzing() method (some versions use this)
+            if (!foundPlayMethod)
+            {
+                var analyzeMethod = salsaType.GetMethod("StartAnalyzing",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+                
+                if (analyzeMethod != null)
+                {
+                    foundPlayMethod = true;
+                    analyzeMethod.Invoke(salsaComponent, null);
+                    Debug.Log("SALSA StartAnalyzing() method called");
+                }
+            }
+            
+            // Third try: Process() method (some other versions)
+            if (!foundPlayMethod)
+            {
+                var processMethod = salsaType.GetMethod("Process",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+                
+                if (processMethod != null)
+                {
+                    foundPlayMethod = true;
+                    processMethod.Invoke(salsaComponent, null);
+                    Debug.Log("SALSA Process() method called");
+                }
+            }
+            
+            if (foundSetAudioClipMethod && foundPlayMethod)
+            {
+                Debug.Log("SALSA lip sync appears to be successfully set up!");
+            }
+            else
+            {
+                Debug.LogWarning($"Some SALSA methods could not be found. SetAudioClip: {foundSetAudioClipMethod}, Play: {foundPlayMethod}");
+                
+                // List all available methods for debugging
+                var methods = salsaType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+                Debug.Log($"Available methods on SALSA component ({methods.Length} total):");
+                foreach (var method in methods.Take(15)) // Show first 15 methods
+                {
+                    string parameters = string.Join(", ", method.GetParameters().Select(p => p.ParameterType.Name));
+                    Debug.Log($"  - {method.Name}({parameters})");
+                }
+            }
+        }
+        catch (System.Exception e)
+        {
+            // Safe error handling, won't break the app
+            Debug.LogError($"Error setting up SALSA lip sync: {e.Message}\n{e.StackTrace}");
+        }
     }
-    */
     
     private void EndSession()
     {

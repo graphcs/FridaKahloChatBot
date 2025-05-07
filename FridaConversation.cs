@@ -17,7 +17,6 @@ public class FridaConversation : MonoBehaviour
     [SerializeField] private string serverUrl = "http://localhost:5001";
     [SerializeField] private Button recordButton;
     [SerializeField] private Button endSessionButton;
-    [SerializeField] private Text responseText;
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private int recordingDuration = 5;
     
@@ -150,25 +149,31 @@ public class FridaConversation : MonoBehaviour
         Debug.Log("Starting Frida session...");
         string url = $"{serverUrl}/start_session";
         
-        using (UnityWebRequest www = UnityWebRequest.Post(url, ""))
+        UnityWebRequest www = null;
+        
+        try
         {
-            yield return www.SendWebRequest();
-            
+            www = UnityWebRequest.Post(url, "");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error creating web request in StartSession: {e.Message}");
+            yield break;
+        }
+        
+        // Move yield outside of try-catch
+        yield return www.SendWebRequest();
+        
+        try
+        {
             if (www.result == UnityWebRequest.Result.Success)
             {
                 SessionResponse response = JsonUtility.FromJson<SessionResponse>(www.downloadHandler.text);
                 sessionId = response.session_id;
                 Debug.Log($"Session started with ID: {sessionId}");
                 
-                // Display welcome message - add null check
-                if (responseText != null)
-                {
-                    responseText.text = response.welcome_text;
-                }
-                else
-                {
-                    Debug.Log("Welcome message: " + response.welcome_text);
-                }
+                // Display welcome message
+                Debug.Log("Welcome message: " + response.welcome_text);
                 
                 // Play welcome audio
                 if (!string.IsNullOrEmpty(response.welcome_audio))
@@ -181,6 +186,14 @@ public class FridaConversation : MonoBehaviour
             {
                 Debug.LogError($"Failed to start session: {www.error}");
             }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error processing session response: {e.Message}");
+        }
+        finally
+        {
+            www.Dispose();
         }
     }
     
@@ -210,7 +223,7 @@ public class FridaConversation : MonoBehaviour
     {
         isRecording = true;
         
-        // Update UI - Add null check for Text component
+        // Update UI
         if (recordButton != null)
         {
             Text buttonText = recordButton.GetComponentInChildren<Text>();
@@ -229,124 +242,160 @@ public class FridaConversation : MonoBehaviour
         {
             Debug.LogError("No microphone detected. Please connect a microphone.");
             isRecording = false;
-            return null;
+            yield break;
         }
+        
+        AudioClip tempClip = null;
+        int sampleRate = 44100; // Moved out of try block to be accessible throughout method
         
         try
         {
-            int sampleRate = 44100;
             recordingClip = Microphone.Start(null, false, 30, sampleRate); // Max 30 seconds
+            tempClip = recordingClip; // Store reference for cleanup
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error starting microphone: {e.Message}");
+            isRecording = false;
             
-            if (recordingClip == null)
-            {
-                Debug.LogError("Failed to start microphone recording");
-                isRecording = false;
-                return null;
-            }
-            
-            float[] samples = new float[1024];
-            int startPosition = 0;
-            float silenceTime = 0f;
-            bool hasSpeechStarted = false;
-            
-            Debug.Log("Dynamic recording started, waiting for speech...");
-            
-            while (isRecording)
-            {
-                int currentPosition = Microphone.GetPosition(null);
-                if (currentPosition < startPosition) currentPosition = recordingClip.samples;
-                
-                int diff = currentPosition - startPosition;
-                if (diff < samples.Length) 
-                {
-                    yield return null;
-                    continue;
-                }
-                
-                recordingClip.GetData(samples, startPosition % recordingClip.samples);
-                startPosition = (startPosition + samples.Length) % recordingClip.samples;
-                
-                // Calculate volume/energy in the sample
-                float sum = 0;
-                for (int i = 0; i < samples.Length; i++)
-                {
-                    sum += Mathf.Abs(samples[i]);
-                }
-                float rms = sum / samples.Length;
-                
-                // Check if speech started
-                if (!hasSpeechStarted)
-                {
-                    if (rms > silenceThreshold)
-                    {
-                        hasSpeechStarted = true;
-                        Debug.Log("Speech detected!");
-                    }
-                }
-                else
-                {
-                    // Check for silence
-                    if (rms < silenceThreshold)
-                    {
-                        silenceTime += samples.Length / (float)sampleRate;
-                        if (silenceTime >= silenceTimeToStop)
-                        {
-                            Debug.Log("Silence detected, stopping recording");
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        silenceTime = 0;
-                    }
-                }
-                
-                yield return null;
-            }
-            
-            // Stop recording
-            Microphone.End(null);
-            Debug.Log("Recording finished");
-            
-            if (!hasSpeechStarted)
-            {
-                Debug.Log("No speech detected, aborting");
-                isRecording = false;
-                if (recordButton != null)
-                {
-                    Text buttonText = recordButton.GetComponentInChildren<Text>();
-                    if (buttonText != null)
-                    {
-                        buttonText.text = "Record";
-                    }
-                }
-                yield break;
-            }
-            
-            // Update UI - Add null check for Text component
+            // Update UI
             if (recordButton != null)
             {
                 Text buttonText = recordButton.GetComponentInChildren<Text>();
                 if (buttonText != null)
                 {
-                    buttonText.text = "Processing...";
+                    buttonText.text = "Record";
+                }
+            }
+            yield break;
+        }
+        
+        if (recordingClip == null)
+        {
+            Debug.LogError("Failed to start microphone recording");
+            isRecording = false;
+            yield break;
+        }
+        
+        float[] samples = new float[1024];
+        int startPosition = 0;
+        float silenceTime = 0f;
+        bool hasSpeechStarted = false;
+        
+        Debug.Log("Dynamic recording started, waiting for speech...");
+        
+        while (isRecording)
+        {
+            int currentPosition = Microphone.GetPosition(null);
+            if (currentPosition < startPosition) currentPosition = recordingClip.samples;
+            
+            int diff = currentPosition - startPosition;
+            if (diff < samples.Length) 
+            {
+                yield return null;
+                continue;
+            }
+            
+            recordingClip.GetData(samples, startPosition % recordingClip.samples);
+            startPosition = (startPosition + samples.Length) % recordingClip.samples;
+            
+            // Calculate volume/energy in the sample
+            float sum = 0;
+            for (int i = 0; i < samples.Length; i++)
+            {
+                sum += Mathf.Abs(samples[i]);
+            }
+            float rms = sum / samples.Length;
+            
+            // Check if speech started
+            if (!hasSpeechStarted)
+            {
+                if (rms > silenceThreshold)
+                {
+                    hasSpeechStarted = true;
+                    Debug.Log("Speech detected!");
+                }
+            }
+            else
+            {
+                // Check for silence
+                if (rms < silenceThreshold)
+                {
+                    silenceTime += samples.Length / (float)sampleRate;
+                    if (silenceTime >= silenceTimeToStop)
+                    {
+                        Debug.Log("Silence detected, stopping recording");
+                        break;
+                    }
+                }
+                else
+                {
+                    silenceTime = 0;
                 }
             }
             
+            yield return null;
+        }
+        
+        // Stop recording
+        Microphone.End(null);
+        Debug.Log("Recording finished");
+        
+        if (!hasSpeechStarted)
+        {
+            Debug.Log("No speech detected, aborting");
+            isRecording = false;
+            if (recordButton != null)
+            {
+                Text buttonText = recordButton.GetComponentInChildren<Text>();
+                if (buttonText != null)
+                {
+                    buttonText.text = "Record";
+                }
+            }
+            yield break;
+        }
+        
+        // Update UI
+        if (recordButton != null)
+        {
+            Text buttonText = recordButton.GetComponentInChildren<Text>();
+            if (buttonText != null)
+            {
+                buttonText.text = "Processing...";
+            }
+        }
+        
+        byte[] wavData = null;
+        
+        try
+        {
             // Convert AudioClip to WAV
-            byte[] wavData = AudioClipToWav(recordingClip);
-            
-            // Send to server for transcription
-            yield return StartCoroutine(TranscribeAudio(wavData));
+            wavData = AudioClipToWav(recordingClip);
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Error during dynamic recording: {e.Message}");
+            Debug.LogError($"Error converting audio to WAV: {e.Message}");
+            isRecording = false;
+            
+            // Update UI
+            if (recordButton != null)
+            {
+                Text buttonText = recordButton.GetComponentInChildren<Text>();
+                if (buttonText != null)
+                {
+                    buttonText.text = "Record";
+                }
+            }
+            yield break;
         }
+        
+        // Send to server for transcription
+        yield return StartCoroutine(TranscribeAudio(wavData));
         
         isRecording = false;
         
-        // Update UI - Add null check for Text component
+        // Update UI
         if (recordButton != null)
         {
             Text buttonText = recordButton.GetComponentInChildren<Text>();
@@ -361,7 +410,7 @@ public class FridaConversation : MonoBehaviour
     {
         isRecording = true;
         
-        // Update UI - Add null check for Text component
+        // Update UI
         if (recordButton != null)
         {
             Text buttonText = recordButton.GetComponentInChildren<Text>();
@@ -380,54 +429,90 @@ public class FridaConversation : MonoBehaviour
         {
             Debug.LogError("No microphone detected. Please connect a microphone.");
             isRecording = false;
-            return null;
+            yield break;
         }
+        
+        AudioClip tempClip = null;
         
         try
         {
             // Start recording
             recordingClip = Microphone.Start(null, false, recordingDuration, 44100);
+            tempClip = recordingClip; // Store reference for cleanup
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error starting microphone: {e.Message}");
+            isRecording = false;
             
-            if (recordingClip == null)
-            {
-                Debug.LogError("Failed to start microphone recording");
-                isRecording = false;
-                return null;
-            }
-            
-            Debug.Log($"Recording for {recordingDuration} seconds...");
-            
-            // Wait for the recording to complete
-            yield return new WaitForSeconds(recordingDuration);
-            
-            // Stop recording
-            Microphone.End(null);
-            Debug.Log("Recording finished");
-            
-            // Update UI - Add null check for Text component
+            // Update UI
             if (recordButton != null)
             {
                 Text buttonText = recordButton.GetComponentInChildren<Text>();
                 if (buttonText != null)
                 {
-                    buttonText.text = "Processing...";
+                    buttonText.text = "Record";
                 }
             }
-            
+            yield break;
+        }
+        
+        if (recordingClip == null)
+        {
+            Debug.LogError("Failed to start microphone recording");
+            isRecording = false;
+            yield break;
+        }
+        
+        Debug.Log($"Recording for {recordingDuration} seconds...");
+        
+        // Wait for the recording to complete - outside try-catch
+        yield return new WaitForSeconds(recordingDuration);
+        
+        // Stop recording
+        Microphone.End(null);
+        Debug.Log("Recording finished");
+        
+        // Update UI
+        if (recordButton != null)
+        {
+            Text buttonText = recordButton.GetComponentInChildren<Text>();
+            if (buttonText != null)
+            {
+                buttonText.text = "Processing...";
+            }
+        }
+        
+        byte[] wavData = null;
+        
+        try
+        {
             // Convert AudioClip to WAV
-            byte[] wavData = AudioClipToWav(recordingClip);
-            
-            // Send to server for transcription
-            yield return StartCoroutine(TranscribeAudio(wavData));
+            wavData = AudioClipToWav(recordingClip);
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Error during recording: {e.Message}");
+            Debug.LogError($"Error converting audio to WAV: {e.Message}");
+            isRecording = false;
+            
+            // Update UI
+            if (recordButton != null)
+            {
+                Text buttonText = recordButton.GetComponentInChildren<Text>();
+                if (buttonText != null)
+                {
+                    buttonText.text = "Record";
+                }
+            }
+            yield break;
         }
+        
+        // Send to server for transcription - outside try-catch
+        yield return StartCoroutine(TranscribeAudio(wavData));
         
         isRecording = false;
         
-        // Update UI - Add null check for Text component
+        // Update UI
         if (recordButton != null)
         {
             Text buttonText = recordButton.GetComponentInChildren<Text>();
@@ -445,120 +530,162 @@ public class FridaConversation : MonoBehaviour
         WWWForm form = new WWWForm();
         form.AddBinaryData("audio", audioData, "recording.wav", "audio/wav");
         
-        using (UnityWebRequest www = UnityWebRequest.Post(url, form))
+        UnityWebRequest www = null;
+        
+        try
         {
-            yield return www.SendWebRequest();
-            
+            www = UnityWebRequest.Post(url, form);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error creating web request in TranscribeAudio: {e.Message}");
+            yield break;
+        }
+        
+        // Move yield outside of try-catch
+        yield return www.SendWebRequest();
+        
+        TranscriptionResponse response = null;
+        string transcribedText = null;
+        bool success = false;
+        
+        try
+        {
             if (www.result == UnityWebRequest.Result.Success)
             {
-                TranscriptionResponse response = JsonUtility.FromJson<TranscriptionResponse>(www.downloadHandler.text);
-                string transcribedText = response.text;
+                response = JsonUtility.FromJson<TranscriptionResponse>(www.downloadHandler.text);
+                transcribedText = response.text;
                 Debug.Log($"Transcription: {transcribedText}");
-                
-                // Play a filler immediately
-                yield return StartCoroutine(PlayFiller());
-                
-                // Get Frida's response
-                yield return StartCoroutine(GetFridaResponse(transcribedText));
+                success = true;
             }
             else
             {
                 Debug.LogError($"Transcription failed: {www.error}");
-                if (responseText != null)
-                {
-                    responseText.text = "Error: Could not transcribe audio";
-                }
+                Debug.LogError("Error: Could not transcribe audio");
             }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error processing transcription response: {e.Message}");
+        }
+        finally
+        {
+            www.Dispose();
+        }
+        
+        // Only proceed if we successfully got a transcription
+        if (success && !string.IsNullOrEmpty(transcribedText))
+        {
+            // Play a filler immediately
+            yield return StartCoroutine(PlayFiller());
+            
+            // Get Frida's response
+            yield return StartCoroutine(GetFridaResponse(transcribedText));
         }
     }
     
     private IEnumerator PlayFiller()
     {
+        string url = $"{serverUrl}/get_filler";
+        
+        UnityWebRequest www = null;
+        
         try
         {
-            string url = $"{serverUrl}/get_filler";
-            
-            using (UnityWebRequest www = UnityWebRequest.Post(url, ""))
+            www = UnityWebRequest.Post(url, "");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error creating web request in PlayFiller: {e.Message}");
+            yield break;
+        }
+        
+        // Move yield outside of try-catch
+        yield return www.SendWebRequest();
+        
+        try
+        {
+            if (www.result == UnityWebRequest.Result.Success)
             {
-                yield return www.SendWebRequest();
+                FillerResponse response = JsonUtility.FromJson<FillerResponse>(www.downloadHandler.text);
                 
-                if (www.result == UnityWebRequest.Result.Success)
+                // Convert base64 to audio and play
+                if (!string.IsNullOrEmpty(response.audio_base64))
                 {
-                    FillerResponse response = JsonUtility.FromJson<FillerResponse>(www.downloadHandler.text);
-                    
-                    // Convert base64 to audio and play
-                    if (!string.IsNullOrEmpty(response.audio_base64))
-                    {
-                        byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
-                        PlayAudioFromBytes(audioBytes, response.text, response.estimated_duration);
-                    }
-                    else
-                    {
-                        Debug.LogWarning("No audio in filler response");
-                    }
+                    byte[] audioBytes = Convert.FromBase64String(response.audio_base64);
+                    PlayAudioFromBytes(audioBytes, response.text, response.estimated_duration);
                 }
                 else
                 {
-                    Debug.LogError($"Failed to get filler: {www.error}");
+                    Debug.LogWarning("No audio in filler response");
                 }
+            }
+            else
+            {
+                Debug.LogError($"Failed to get filler: {www.error}");
             }
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Error in PlayFiller: {e.Message}");
+            Debug.LogError($"Error processing filler response: {e.Message}");
+        }
+        finally
+        {
+            www.Dispose();
         }
     }
     
     private IEnumerator GetFridaResponse(string userText)
     {
+        isProcessingResponse = true;
+        isWaitingForResponse = true;
+        
+        string url = $"{serverUrl}/get_response";
+        
+        // Create the request body using Unity's JsonUtility
+        TextRequestData requestData = new TextRequestData
+        {
+            text = userText,
+            session_id = sessionId
+        };
+        
+        string jsonData = JsonUtility.ToJson(requestData);
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+        
+        UnityWebRequest www = null;
+        
         try
         {
-            isProcessingResponse = true;
-            isWaitingForResponse = true;
-            
-            string url = $"{serverUrl}/get_response";
-            
-            // Create the request body using Unity's JsonUtility
-            TextRequestData requestData = new TextRequestData
-            {
-                text = userText,
-                session_id = sessionId
-            };
-            
-            string jsonData = JsonUtility.ToJson(requestData);
-            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
-            
-            using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
-            {
-                www.uploadHandler = new UploadHandlerRaw(bodyRaw);
-                www.downloadHandler = new DownloadHandlerBuffer();
-                www.SetRequestHeader("Content-Type", "application/json");
-                
-                yield return www.SendWebRequest();
-                
-                if (www.result == UnityWebRequest.Result.Success)
-                {
-                    // Start checking for response completion
-                    checkResponseCoroutine = StartCoroutine(CheckResponseStatus());
-                }
-                else
-                {
-                    Debug.LogError($"Failed to start response generation: {www.error}");
-                    if (responseText != null)
-                    {
-                        responseText.text = "Error: Could not get Frida's response";
-                    }
-                    isProcessingResponse = false;
-                    isWaitingForResponse = false;
-                }
-            }
+            www = new UnityWebRequest(url, "POST");
+            www.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            www.downloadHandler = new DownloadHandlerBuffer();
+            www.SetRequestHeader("Content-Type", "application/json");
         }
         catch (System.Exception e)
         {
             Debug.LogError($"Error in GetFridaResponse: {e.Message}");
             isProcessingResponse = false;
             isWaitingForResponse = false;
+            yield break;
         }
+        
+        // Move yield outside of try-catch
+        yield return www.SendWebRequest();
+        
+        if (www.result == UnityWebRequest.Result.Success)
+        {
+            // Start checking for response completion
+            checkResponseCoroutine = StartCoroutine(CheckResponseStatus());
+        }
+        else
+        {
+            Debug.LogError($"Failed to start response generation: {www.error}");
+            Debug.LogError("Error: Could not get Frida's response");
+            isProcessingResponse = false;
+            isWaitingForResponse = false;
+        }
+        
+        www.Dispose();
     }
     
     private IEnumerator CheckResponseStatus()
@@ -581,15 +708,38 @@ public class FridaConversation : MonoBehaviour
         
         while (!isComplete && retryCount < maxRetries)
         {
-            using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
+            UnityWebRequest www = null;
+            bool requestCreationError = false;
+            
+            try
             {
+                www = new UnityWebRequest(url, "POST");
                 www.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 www.downloadHandler = new DownloadHandlerBuffer();
                 www.SetRequestHeader("Content-Type", "application/json");
-                
-                yield return www.SendWebRequest();
-                
-                if (www.result == UnityWebRequest.Result.Success)
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error creating request in CheckResponseStatus: {e.Message}");
+                requestCreationError = true;
+                retryCount++;
+            }
+            
+            // If there was an error creating the request, wait and continue
+            if (requestCreationError)
+            {
+                yield return new WaitForSeconds(0.5f);
+                continue;
+            }
+            
+            // Move yield outside of try-catch
+            yield return www.SendWebRequest();
+            
+            bool shouldContinue = false;
+            
+            if (www.result == UnityWebRequest.Result.Success)
+            {
+                try
                 {
                     StatusResponse response = JsonUtility.FromJson<StatusResponse>(www.downloadHandler.text);
                     
@@ -597,15 +747,8 @@ public class FridaConversation : MonoBehaviour
                     {
                         isComplete = true;
                         
-                        // Update UI with Frida's text response - add null check
-                        if (responseText != null)
-                        {
-                            responseText.text = response.text;
-                        }
-                        else
-                        {
-                            Debug.Log("Frida response: " + response.text);
-                        }
+                        // Log Frida's text response
+                        Debug.Log("Frida response: " + response.text);
                         
                         // Convert base64 to audio and play
                         if (!string.IsNullOrEmpty(response.audio_base64))
@@ -617,18 +760,32 @@ public class FridaConversation : MonoBehaviour
                         {
                             Debug.LogWarning("No audio received in response");
                         }
-                        break;
+                    }
+                    else
+                    {
+                        // Response not complete yet, continue polling
+                        shouldContinue = true;
                     }
                 }
-                else
+                catch (System.Exception e)
                 {
-                    Debug.LogError($"Failed to check response status: {www.error}");
-                    break;
+                    Debug.LogError($"Error processing response: {e.Message}");
+                    shouldContinue = true;
                 }
             }
+            else
+            {
+                Debug.LogError($"Failed to check response status: {www.error}");
+                shouldContinue = true;
+            }
             
-            retryCount++;
-            yield return new WaitForSeconds(0.5f); // Poll every half second
+            www.Dispose();
+            
+            if (shouldContinue)
+            {
+                retryCount++;
+                yield return new WaitForSeconds(0.5f); // Poll every half second
+            }
         }
         
         if (!isComplete)
@@ -672,15 +829,8 @@ public class FridaConversation : MonoBehaviour
             audioSource.clip = clip;
             audioSource.Play();
             
-            // Update the UI with the text
-            if (responseText != null)
-            {
-                responseText.text = text;
-            }
-            else
-            {
-                Debug.Log("Response text: " + text);
-            }
+            // Log the text
+            Debug.Log("Response text: " + text);
         }
         catch (System.Exception e)
         {
@@ -709,43 +859,50 @@ public class FridaConversation : MonoBehaviour
     
     private IEnumerator LoadAndPlayAudio(string filePath, string text)
     {
+        if (audioSource == null)
+        {
+            Debug.LogError("AudioSource is null. Cannot load and play audio.");
+            yield break;
+        }
+        
+        UnityWebRequest www = null;
+        
         try
         {
-            if (audioSource == null)
+            www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.WAV);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error creating web request in LoadAndPlayAudio: {e.Message}");
+            yield break;
+        }
+        
+        // Move yield outside of try-catch
+        yield return www.SendWebRequest();
+        
+        try
+        {
+            if (www.result == UnityWebRequest.Result.Success)
             {
-                Debug.LogError("AudioSource is null. Cannot load and play audio.");
-                yield break;
-            }
-            
-            using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.WAV))
-            {
-                yield return www.SendWebRequest();
+                AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+                audioSource.clip = clip;
+                audioSource.Play();
                 
-                if (www.result == UnityWebRequest.Result.Success)
-                {
-                    AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
-                    audioSource.clip = clip;
-                    audioSource.Play();
-                    
-                    // Update the UI with the text
-                    if (responseText != null)
-                    {
-                        responseText.text = text;
-                    }
-                    else
-                    {
-                        Debug.Log("Response text: " + text);
-                    }
-                }
-                else
-                {
-                    Debug.LogError($"Failed to load audio file: {www.error}");
-                }
+                // Log the text
+                Debug.Log("Response text: " + text);
+            }
+            else
+            {
+                Debug.LogError($"Failed to load audio file: {www.error}");
             }
         }
         catch (System.Exception e)
         {
             Debug.LogError($"Error in LoadAndPlayAudio: {e.Message}");
+        }
+        finally
+        {
+            www.Dispose();
         }
     }
     
@@ -807,14 +964,26 @@ public class FridaConversation : MonoBehaviour
         string jsonData = JsonUtility.ToJson(requestData);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
         
-        using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
+        UnityWebRequest www = null;
+        
+        try
         {
+            www = new UnityWebRequest(url, "POST");
             www.uploadHandler = new UploadHandlerRaw(bodyRaw);
             www.downloadHandler = new DownloadHandlerBuffer();
             www.SetRequestHeader("Content-Type", "application/json");
-            
-            yield return www.SendWebRequest();
-            
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error creating web request in EndSessionCoroutine: {e.Message}");
+            yield break;
+        }
+        
+        // Move yield outside of try-catch
+        yield return www.SendWebRequest();
+        
+        try
+        {
             if (www.result == UnityWebRequest.Result.Success)
             {
                 Debug.Log("Session ended successfully");
@@ -824,6 +993,14 @@ public class FridaConversation : MonoBehaviour
             {
                 Debug.LogError($"Failed to end session: {www.error}");
             }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error processing end session response: {e.Message}");
+        }
+        finally
+        {
+            www.Dispose();
         }
     }
     

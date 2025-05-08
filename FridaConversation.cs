@@ -10,7 +10,7 @@ using System.IO;
 // Replace Newtonsoft.Json with Unity's built-in SimpleJSON
 // using Newtonsoft.Json;
 
-// Add SALSA import directly for v2
+// Add main SALSA namespace - exact types can vary by version
 using CrazyMinnow.SALSA;
 
 public class FridaConversation : MonoBehaviour
@@ -21,9 +21,9 @@ public class FridaConversation : MonoBehaviour
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private int recordingDuration = 5;
     
-    // Update the SALSA component reference to the specific v2 type
+    // Use MonoBehaviour reference to avoid compile-time errors with different SALSA versions
     [Tooltip("Reference to the Salsa component on your character")]
-    [SerializeField] private Salsa2 salsaComponent; // Directly using Salsa2 type instead of generic MonoBehaviour
+    [SerializeField] private MonoBehaviour salsaComponent; // Using generic MonoBehaviour to support any SALSA version
     
     // Microphone settings
     [SerializeField] private bool useDynamicListening = false;
@@ -1119,7 +1119,7 @@ public class FridaConversation : MonoBehaviour
     }
     
     /// <summary>
-    /// Sets up SALSA lip sync using direct SALSA v2 methods instead of reflection
+    /// Sets up SALSA lip sync using reflection to support any SALSA version
     /// </summary>
     private void SetupSalsaLipSync(string text, float duration, PhonemeData[] phonemeData)
     {
@@ -1140,23 +1140,101 @@ public class FridaConversation : MonoBehaviour
                 return;
             }
             
-            Debug.Log($"Setting up SALSA v2 with audio clip: {currentClip.name}, Length: {currentClip.length}s");
+            // Get component type info for reflection
+            Type salsaType = salsaComponent.GetType();
+            string salsaTypeName = salsaType.Name;
             
-            // Direct SALSA v2 method calls
-            salsaComponent.SetAudioClip(currentClip);
+            Debug.Log($"Setting up SALSA lip sync using component type: {salsaTypeName}");
             
-            // If audio is already playing in the audioSource, we can just tell SALSA to process it
-            if (audioSource.isPlaying)
+            // Try to find the appropriate method to set the audio clip
+            bool setupSuccessful = false;
+            
+            // First try: SetAudioClip method
+            var setAudioClipMethod = salsaType.GetMethod("SetAudioClip", 
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                null, new Type[] { typeof(AudioClip) }, null);
+                
+            if (setAudioClipMethod != null)
             {
-                salsaComponent.Play();
-                Debug.Log("SALSA v2 Play method called");
+                setAudioClipMethod.Invoke(salsaComponent, new object[] { currentClip });
+                Debug.Log($"Set audio clip via SetAudioClip method");
+                setupSuccessful = true;
+            }
+            // Second try: SetAudioSource method
+            else
+            {
+                var setAudioSourceMethod = salsaType.GetMethod("SetAudioSource",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                    null, new Type[] { typeof(AudioSource) }, null);
+                    
+                if (setAudioSourceMethod != null)
+                {
+                    setAudioSourceMethod.Invoke(salsaComponent, new object[] { audioSource });
+                    Debug.Log($"Set audio source via SetAudioSource method");
+                    setupSuccessful = true;
+                }
+            }
+            
+            // Now try to find and call the Play or equivalent method
+            bool playSuccessful = false;
+            
+            // Try common method names in order of likelihood
+            string[] playMethodNames = new string[] { "Play", "StartAnalyzing", "Process", "DoUpdate", "Update" };
+            
+            foreach (string methodName in playMethodNames)
+            {
+                var playMethod = salsaType.GetMethod(methodName,
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                    null, Type.EmptyTypes, null);
+                    
+                if (playMethod != null)
+                {
+                    playMethod.Invoke(salsaComponent, null);
+                    Debug.Log($"Called {methodName}() method to start SALSA processing");
+                    playSuccessful = true;
+                    break;
+                }
+            }
+            
+            // Log final status
+            if (setupSuccessful && playSuccessful)
+            {
+                Debug.Log("SALSA lip sync successfully set up!");
+            }
+            else if (setupSuccessful)
+            {
+                Debug.LogWarning("Set up audio for SALSA but couldn't find Play method - lip sync might not start");
             }
             else
             {
-                Debug.LogWarning("Audio source is not playing, SALSA may not sync properly");
+                Debug.LogError("Failed to set up SALSA lip sync - no compatible methods found");
+                
+                // Print available methods for debugging
+                System.Reflection.MethodInfo[] methods = salsaType.GetMethods(
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                
+                Debug.Log($"Available methods on {salsaTypeName} ({methods.Length} total):");
+                foreach (var method in methods.Where(m => !m.IsSpecialName).Take(15))
+                {
+                    string parameters = string.Join(", ", 
+                        method.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
+                    Debug.Log($"  - {method.ReturnType.Name} {method.Name}({parameters})");
+                }
+                
+                // Also check for common SALSA properties
+                string[] commonProperties = new string[] { "audioSource", "clip", "audioClip" };
+                var properties = salsaType.GetProperties(
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                
+                Debug.Log($"Properties that might be useful:");
+                foreach (var prop in properties.Where(p => commonProperties.Contains(p.Name.ToLower())))
+                {
+                    Debug.Log($"  - {prop.PropertyType.Name} {prop.Name}");
+                }
+                
+                Debug.LogWarning("IMPORTANT: Make sure the SALSA component on your character is properly set up and compatible with this code.");
+                Debug.LogWarning("Check the SALSA documentation for your specific version of SALSA.");
             }
-            
-            Debug.Log("SALSA v2 lip sync successfully set up");
         }
         catch (System.Exception e)
         {

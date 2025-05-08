@@ -10,8 +10,8 @@ using System.IO;
 // Replace Newtonsoft.Json with Unity's built-in SimpleJSON
 // using Newtonsoft.Json;
 
-// Don't force SALSA import - let's use reflection instead
-// using CrazyMinnow.SALSA;
+// Add SALSA import directly for v2
+using CrazyMinnow.SALSA;
 
 public class FridaConversation : MonoBehaviour
 {
@@ -21,9 +21,9 @@ public class FridaConversation : MonoBehaviour
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private int recordingDuration = 5;
     
-    // SALSA lip sync support - safe reference approach
+    // Update the SALSA component reference to the specific v2 type
     [Tooltip("Reference to the Salsa component on your character")]
-    [SerializeField] private MonoBehaviour salsaComponent; // Will be cast to SALSA if available
+    [SerializeField] private Salsa2 salsaComponent; // Directly using Salsa2 type instead of generic MonoBehaviour
     
     // Microphone settings
     [SerializeField] private bool useDynamicListening = false;
@@ -1119,8 +1119,7 @@ public class FridaConversation : MonoBehaviour
     }
     
     /// <summary>
-    /// Sets up SALSA lip sync if the component is available.
-    /// This implementation uses only reflection to work with any SALSA version.
+    /// Sets up SALSA lip sync using direct SALSA v2 methods instead of reflection
     /// </summary>
     private void SetupSalsaLipSync(string text, float duration, PhonemeData[] phonemeData)
     {
@@ -1131,121 +1130,33 @@ public class FridaConversation : MonoBehaviour
             return;
         }
         
-        // Pure reflection-based approach to handle any SALSA version
         try
         {
-            // Get information about the component type
-            Type salsaType = salsaComponent.GetType();
-            Debug.Log($"Found SALSA component of type: {salsaType.FullName}");
-            
-            bool foundSetAudioClipMethod = false;
-            bool foundPlayMethod = false;
-            
-            // Different SALSA versions have different method signatures, so try several variations
-            
-            // First try: Try SetAudioClip(AudioClip)
-            var setAudioClipMethod = salsaType.GetMethod("SetAudioClip", 
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public, 
-                null, new Type[] { typeof(AudioClip) }, null);
-            
-            if (setAudioClipMethod != null)
+            // Get the current audio clip
+            AudioClip currentClip = audioSource?.clip;
+            if (currentClip == null)
             {
-                foundSetAudioClipMethod = true;
-                Debug.Log("Found SALSA SetAudioClip(AudioClip) method");
-                
-                // Get the current audio clip
-                AudioClip currentClip = audioSource?.clip;
-                if (currentClip != null)
-                {
-                    Debug.Log($"Setting audio clip: {currentClip.name}, Length: {currentClip.length}s");
-                    setAudioClipMethod.Invoke(salsaComponent, new object[] { currentClip });
-                }
-                else
-                {
-                    Debug.LogWarning("No audio clip available for SALSA");
-                    return;
-                }
+                Debug.LogWarning("No audio clip available for SALSA");
+                return;
             }
             
-            // Second try: Try SetAudioSource(AudioSource)
-            if (!foundSetAudioClipMethod)
+            Debug.Log($"Setting up SALSA v2 with audio clip: {currentClip.name}, Length: {currentClip.length}s");
+            
+            // Direct SALSA v2 method calls
+            salsaComponent.SetAudioClip(currentClip);
+            
+            // If audio is already playing in the audioSource, we can just tell SALSA to process it
+            if (audioSource.isPlaying)
             {
-                var setAudioSourceMethod = salsaType.GetMethod("SetAudioSource",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
-                    null, new Type[] { typeof(AudioSource) }, null);
-                
-                if (setAudioSourceMethod != null)
-                {
-                    foundSetAudioClipMethod = true;
-                    Debug.Log("Found SALSA SetAudioSource method instead");
-                    
-                    if (audioSource != null)
-                    {
-                        setAudioSourceMethod.Invoke(salsaComponent, new object[] { audioSource });
-                        Debug.Log("Set AudioSource directly on SALSA component");
-                    }
-                }
-            }
-            
-            // Try various Play methods
-            
-            // First try: Play() with no parameters
-            var playMethod = salsaType.GetMethod("Play", 
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
-                null, System.Type.EmptyTypes, null);
-            
-            if (playMethod != null)
-            {
-                foundPlayMethod = true;
-                playMethod.Invoke(salsaComponent, null);
-                Debug.Log("SALSA Play() method called");
-            }
-            
-            // Second try: StartAnalyzing() method (some versions use this)
-            if (!foundPlayMethod)
-            {
-                var analyzeMethod = salsaType.GetMethod("StartAnalyzing",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
-                
-                if (analyzeMethod != null)
-                {
-                    foundPlayMethod = true;
-                    analyzeMethod.Invoke(salsaComponent, null);
-                    Debug.Log("SALSA StartAnalyzing() method called");
-                }
-            }
-            
-            // Third try: Process() method (some other versions)
-            if (!foundPlayMethod)
-            {
-                var processMethod = salsaType.GetMethod("Process",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
-                
-                if (processMethod != null)
-                {
-                    foundPlayMethod = true;
-                    processMethod.Invoke(salsaComponent, null);
-                    Debug.Log("SALSA Process() method called");
-                }
-            }
-            
-            if (foundSetAudioClipMethod && foundPlayMethod)
-            {
-                Debug.Log("SALSA lip sync appears to be successfully set up!");
+                salsaComponent.Play();
+                Debug.Log("SALSA v2 Play method called");
             }
             else
             {
-                Debug.LogWarning($"Some SALSA methods could not be found. SetAudioClip: {foundSetAudioClipMethod}, Play: {foundPlayMethod}");
-                
-                // List all available methods for debugging
-                var methods = salsaType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
-                Debug.Log($"Available methods on SALSA component ({methods.Length} total):");
-                foreach (var method in methods.Take(15)) // Show first 15 methods
-                {
-                    string parameters = string.Join(", ", method.GetParameters().Select(p => p.ParameterType.Name));
-                    Debug.Log($"  - {method.Name}({parameters})");
-                }
+                Debug.LogWarning("Audio source is not playing, SALSA may not sync properly");
             }
+            
+            Debug.Log("SALSA v2 lip sync successfully set up");
         }
         catch (System.Exception e)
         {

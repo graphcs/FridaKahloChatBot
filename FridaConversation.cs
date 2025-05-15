@@ -130,6 +130,9 @@ public class FridaConversation : MonoBehaviour
         {
             Debug.Log("Starting Frida Conversation...");
             
+            // Ensure there's an AudioListener in the scene
+            EnsureAudioListener();
+            
             // Initialize UI elements
             if (recordButton != null)
             {
@@ -178,6 +181,75 @@ public class FridaConversation : MonoBehaviour
         {
             Debug.LogError($"Error in Start: {e.Message}");
         }
+    }
+    
+    // Method to ensure there's an active AudioListener in the scene
+    private void EnsureAudioListener()
+    {
+        // First check if there's already an enabled AudioListener anywhere in the scene
+        AudioListener[] existingListeners = FindObjectsOfType<AudioListener>();
+        
+        foreach (AudioListener listener in existingListeners)
+        {
+            if (listener.enabled)
+            {
+                Debug.Log($"Found active AudioListener on '{listener.gameObject.name}'");
+                return; // Already have an active listener, no need to add one
+            }
+        }
+        
+        Debug.LogWarning("No active AudioListener found in scene! Audio will not be heard.");
+        
+        // Try to find camera(s) to add an AudioListener to
+        Camera mainCamera = Camera.main;
+        
+        // First check if there's a Zapper camera
+        GameObject zapperCameraObj = GameObject.Find("ZapperCamera");
+        if (zapperCameraObj != null && zapperCameraObj.GetComponent<Camera>() != null)
+        {
+            Debug.Log("Found Zapper camera, adding AudioListener");
+            
+            // Check if it already has a disabled AudioListener
+            AudioListener existingListener = zapperCameraObj.GetComponent<AudioListener>();
+            if (existingListener != null)
+            {
+                existingListener.enabled = true;
+                Debug.Log("Enabled existing AudioListener on Zapper camera");
+            }
+            else
+            {
+                zapperCameraObj.AddComponent<AudioListener>();
+                Debug.Log("Added new AudioListener to Zapper camera");
+            }
+            return;
+        }
+        
+        // If no Zapper camera, try the main camera
+        if (mainCamera != null)
+        {
+            Debug.Log("Adding AudioListener to main camera");
+            
+            // Check if the camera already has a disabled listener
+            AudioListener existingListener = mainCamera.GetComponent<AudioListener>();
+            if (existingListener != null)
+            {
+                existingListener.enabled = true;
+                Debug.Log("Enabled existing AudioListener on main camera");
+            }
+            else
+            {
+                mainCamera.gameObject.AddComponent<AudioListener>();
+                Debug.Log("Added new AudioListener to main camera");
+            }
+            return;
+        }
+        
+        // If no suitable camera found, create a dedicated AudioListener object
+        Debug.LogWarning("No camera found to add AudioListener. Creating a dedicated AudioListener object.");
+        GameObject listenerObj = new GameObject("AudioListener");
+        listenerObj.AddComponent<AudioListener>();
+        listenerObj.transform.position = Vector3.zero;
+        Debug.Log("Created dedicated AudioListener game object");
     }
     
     private IEnumerator StartSession()
@@ -247,6 +319,7 @@ public class FridaConversation : MonoBehaviour
         if (sessionStarted)
         {
             // Mark that we're speaking to prevent automatic listening from starting
+            Debug.Log($"[StartSession] Setting isSpeaking = true (was {isSpeaking})");
             isSpeaking = true;
             
             // Play welcome audio if available - outside try block
@@ -260,6 +333,7 @@ public class FridaConversation : MonoBehaviour
             yield return new WaitForSeconds(postSpeechWaitTime);
             
             // No longer speaking
+            Debug.Log($"[StartSession] Setting isSpeaking = false (was {isSpeaking})");
             isSpeaking = false;
             
             // Start automatic listening if enabled (after welcome audio is done)
@@ -284,6 +358,7 @@ public class FridaConversation : MonoBehaviour
         Debug.Log("==== STARTING WELCOME AUDIO PLAYBACK - SYSTEM IS IN SPEAKING MODE ====");
         
         // Make sure isSpeaking flag is set
+        Debug.Log($"[PlayWelcomeAudio] Setting isSpeaking = true (was {isSpeaking})");
         isSpeaking = true;
         
         if (audioSource == null)
@@ -451,6 +526,7 @@ public class FridaConversation : MonoBehaviour
         Debug.Log("^^^ EXPLICITLY PAUSING LISTENING SYSTEM ^^^");
         
         // IMMEDIATELY set isSpeaking flag to prevent any new recordings
+        Debug.Log($"[PauseListeningForSpeech] Setting isSpeaking = true (was {isSpeaking})");
         isSpeaking = true;
         
         // First stop any ongoing recording
@@ -519,6 +595,7 @@ public class FridaConversation : MonoBehaviour
         yield return new WaitForSeconds(postSpeechWaitTime);
         
         // Reset speaking state BEFORE restarting listening
+        Debug.Log($"[MonitorSpeechCompletionAndResume] Setting isSpeaking = false (was {isSpeaking})");
         isSpeaking = false;
         
         // Check if we should resume (user didn't manually stop listening during speech)
@@ -559,6 +636,10 @@ public class FridaConversation : MonoBehaviour
         
         int loopIterations = 0;
         
+        // Add a timer to detect stuck recording state
+        float recordingStuckTimer = 0f;
+        float maxRecordingTime = 40f; // Maximum time a recording can take before we force reset
+        
         while (!shouldStopListening)
         {
             loopIterations++;
@@ -567,14 +648,52 @@ public class FridaConversation : MonoBehaviour
             if (loopIterations % 10 == 0)
             {
                 Debug.Log($">>> LISTENING LOOP ACTIVE (iteration {loopIterations}) <<<");
+                Debug.Log($">>> SYSTEM STATE: isRecording={isRecording}, isSpeaking={isSpeaking}, isProcessingResponse={isProcessingResponse}, isWaitingForResponse={isWaitingForResponse} <<<");
             }
             
             // Don't start a new recording if we're already processing something or speaking
             if (isRecording)
             {
-                Debug.Log("Already recording, waiting for completion...");
-                yield return new WaitForSeconds(0.5f);
-                continue;
+                // Track how long we've been in the recording state to detect when it's stuck
+                recordingStuckTimer += 0.5f;
+                
+                // If we've been recording for too long, force reset the state
+                if (recordingStuckTimer > maxRecordingTime)
+                {
+                    Debug.LogWarning($"!!! FORCE RESETTING STUCK RECORDING STATE !!! (Was in isRecording=true for {recordingStuckTimer}s)");
+                    
+                    // Force stop any microphone recording and clear any active coroutine
+                    if (Microphone.IsRecording(null))
+                    {
+                        Debug.LogWarning("Stopping stuck microphone recording");
+                        Microphone.End(null);
+                    }
+                    
+                    if (dynamicRecordingCoroutine != null)
+                    {
+                        Debug.LogWarning("Stopping stuck dynamicRecordingCoroutine");
+                        StopCoroutine(dynamicRecordingCoroutine);
+                        dynamicRecordingCoroutine = null;
+                    }
+                    
+                    // Reset all flags to a clean state
+                    isRecording = false;
+                    recordingStuckTimer = 0f;
+                    
+                    // Wait a short time before continuing
+                    yield return new WaitForSeconds(0.5f);
+                }
+                else
+                {
+                    Debug.Log($"Already recording, waiting for completion... (Timer: {recordingStuckTimer:F1}s)");
+                    yield return new WaitForSeconds(0.5f);
+                    continue;
+                }
+            }
+            else
+            {
+                // If not recording, reset the timer
+                recordingStuckTimer = 0f;
             }
             
             if (isProcessingResponse || isWaitingForResponse)
@@ -591,21 +710,48 @@ public class FridaConversation : MonoBehaviour
                 continue;
             }
             
-            // Check if we already have an active recording coroutine
-            if (dynamicRecordingCoroutine != null)
+            // EXTRA CHECK: only start recording if we're definitely not in any speaking state
+            if (!isSpeaking && !isProcessingResponse && !isWaitingForResponse && !isRecording) 
             {
-                Debug.LogWarning("Found existing dynamicRecordingCoroutine - stopping it before starting a new one");
-                StopCoroutine(dynamicRecordingCoroutine);
-                dynamicRecordingCoroutine = null;
+                // Check if we already have an active recording coroutine
+                if (dynamicRecordingCoroutine != null)
+                {
+                    Debug.LogWarning("Found existing dynamicRecordingCoroutine - stopping it before starting a new one");
+                    StopCoroutine(dynamicRecordingCoroutine);
+                    dynamicRecordingCoroutine = null;
+                }
+                
+                // Double check that microphone isn't already recording - could happen in stuck states
+                if (Microphone.IsRecording(null))
+                {
+                    Debug.LogWarning("Microphone was found to be recording before starting a new recording - forcing stop");
+                    Microphone.End(null);
+                    yield return new WaitForSeconds(0.1f); // Short pause to ensure microphone is released
+                }
+                
+                Debug.Log(">>> STARTING TO LISTEN FOR SPEECH... <<<");
+                dynamicRecordingCoroutine = StartCoroutine(DynamicRecordAndProcess());
+                
+                // Wait until the dynamic recording is complete with a safety timeout
+                float waitTimeoutCounter = 0f;
+                float maxWaitTimeout = 5f; // Max time to wait for isRecording to be set to true
+                
+                // First, wait a short time for isRecording to be set to true
+                while (!isRecording && waitTimeoutCounter < maxWaitTimeout)
+                {
+                    yield return new WaitForSeconds(0.1f);
+                    waitTimeoutCounter += 0.1f;
+                }
+                
+                // Then wait for it to complete
+                while (isRecording)
+                {
+                    yield return new WaitForSeconds(0.1f);
+                }
             }
-            
-            Debug.Log(">>> STARTING TO LISTEN FOR SPEECH... <<<");
-            dynamicRecordingCoroutine = StartCoroutine(DynamicRecordAndProcess());
-            
-            // Wait until the dynamic recording is complete
-            while (isRecording)
+            else
             {
-                yield return new WaitForSeconds(0.1f);
+                Debug.Log($"Not starting recording due to current state: isSpeaking={isSpeaking}, isProcessingResponse={isProcessingResponse}, isWaitingForResponse={isWaitingForResponse}");
             }
             
             // Wait a moment before checking again
@@ -658,7 +804,17 @@ public class FridaConversation : MonoBehaviour
     private IEnumerator DynamicRecordAndProcess()
     {
         // Reset isSpeaking state to make sure we can record
-        isSpeaking = false;
+        // BUT ONLY if we're not already in a speaking state - this protects during Frida's response
+        if (!isSpeaking && !isProcessingResponse && !isWaitingForResponse) 
+        {
+            Debug.Log($"[DynamicRecordAndProcess] Setting isSpeaking = false (was {isSpeaking})");
+            isSpeaking = false;
+        }
+        else
+        {
+            Debug.Log($"[DynamicRecordAndProcess] CANCELED - Cannot record while Frida is speaking or processing a response");
+            yield break;
+        }
         
         // Set recording state FIRST to mark that we're actively recording
         isRecording = true;
@@ -1138,6 +1294,10 @@ public class FridaConversation : MonoBehaviour
         // This prevents automatic listening from starting a new recording session
         isProcessingResponse = true;
         
+        // Set isSpeaking to true now to prevent new recordings during the entire transcription-response cycle
+        Debug.Log($"[TranscribeAudio] Setting isSpeaking = true (was {isSpeaking})");
+        isSpeaking = true;
+        
         string url = $"{serverUrl}/transcribe";
         
         WWWForm form = new WWWForm();
@@ -1155,6 +1315,9 @@ public class FridaConversation : MonoBehaviour
             
             // Reset processing state on error
             isProcessingResponse = false;
+            
+            // Explicitly ensure recording state is reset
+            isRecording = false;
             
             yield break;
         }
@@ -1209,6 +1372,9 @@ public class FridaConversation : MonoBehaviour
             // Reset processing state if we didn't get a valid transcription
             Debug.LogWarning(">>> TRANSCRIPTION FAILED OR EMPTY - RESETTING STATE <<<");
             isProcessingResponse = false;
+            
+            // Explicitly ensure recording state is reset
+            isRecording = false;
             
             // Ensure listening resumes
             if (useAutomaticListening && !isListening && automaticListeningCoroutine == null && !shouldStopListening)
@@ -1308,6 +1474,7 @@ public class FridaConversation : MonoBehaviour
     private IEnumerator PlayFiller()
     {
         // IMMEDIATELY set isSpeaking to prevent any listening during filler prep
+        Debug.Log($"[PlayFiller] Setting isSpeaking = true (was {isSpeaking})");
         isSpeaking = true;
         
         // First cancel any active recording or listening
@@ -1408,6 +1575,12 @@ public class FridaConversation : MonoBehaviour
     private IEnumerator CheckResponseStatus()
     {
         Debug.Log(">>> CHECKING FOR RESPONSE STATUS <<<");
+        
+        // IMPORTANT: Ensure the system knows Frida is speaking during the entire response process
+        // This will prevent new recordings from starting
+        Debug.Log($"[CheckResponseStatus] Setting isSpeaking = true (was {isSpeaking})");
+        isSpeaking = true;
+        
         string url = $"{serverUrl}/check_response";
         
         // Create the request body using Unity's JsonUtility
@@ -1473,6 +1646,8 @@ public class FridaConversation : MonoBehaviour
                         Debug.Log($"FRIDA RESPONSE: \"{response.text}\"");
                         Debug.Log("----------------------------------------");
                         
+                        // IMPORTANT: KEEP isSpeaking = true while handling audio responses
+                        
                         // IMPORTANT: Always handle text response first to ensure that works
                         bool audioHandled = false;
                         
@@ -1512,6 +1687,14 @@ public class FridaConversation : MonoBehaviour
                         {
                             // Try to request audio directly, but don't wait for it
                             StartCoroutine(TryGetAudioAlternative(sessionId, response.text, response.duration));
+                        }
+                        
+                        // If no audio was handled at all, we need to manually manage the isSpeaking state
+                        if (!audioHandled)
+                        {
+                            // Only start monitoring for completion if we haven't started audio playback
+                            // (PlayAudioFromBytes will handle this otherwise)
+                            StartCoroutine(MonitorSpeechCompletionAndResume());
                         }
                     }
                     else
@@ -1553,6 +1736,7 @@ public class FridaConversation : MonoBehaviour
             if (isSpeaking)
             {
                 Debug.Log("Forcing resume of listening due to response timeout");
+                Debug.Log($"[CheckResponseStatus] Setting isSpeaking = false (was {isSpeaking})");
                 isSpeaking = false;
                 
                 // Make sure we're not in any intermediate states
@@ -1569,6 +1753,9 @@ public class FridaConversation : MonoBehaviour
             Debug.Log(">>> RESPONSE POLLING COMPLETED SUCCESSFULLY <<<");
             isProcessingResponse = false;
             isWaitingForResponse = false;
+            
+            // DO NOT reset isSpeaking here - that will be handled by MonitorSpeechCompletionAndResume
+            // after audio playback completes
         }
     }
     
@@ -1579,6 +1766,7 @@ public class FridaConversation : MonoBehaviour
         
         // IMMEDIATELY set isSpeaking to true at the very start of the method
         // before any network operations
+        Debug.Log($"[TryGetAudioAlternative] Setting isSpeaking = true (was {isSpeaking})");
         isSpeaking = true;
         
         // First cancel any active recording or listening coroutines
@@ -1674,6 +1862,7 @@ public class FridaConversation : MonoBehaviour
     {
         // IMMEDIATELY set isSpeaking to true at the very start of the method
         // before any file operations that might take time
+        Debug.Log($"[PlayAudioFromBytes] Setting isSpeaking = true (was {isSpeaking})");
         isSpeaking = true;
         
         // First cancel any active recording or listening coroutines
@@ -1743,6 +1932,7 @@ public class FridaConversation : MonoBehaviour
             // Make sure we resume listening
             if (isSpeaking)
             {
+                Debug.Log($"[LoadAndPlayAudioFromPath] Setting isSpeaking = false (was {isSpeaking})");
                 isSpeaking = false;
                 if (isListening && automaticListeningCoroutine == null && !shouldStopListening)
                 {
@@ -1887,6 +2077,7 @@ public class FridaConversation : MonoBehaviour
         // Make sure we resume listening even if playback failed
         if (isSpeaking)
         {
+            Debug.Log($"[CleanupAudioAndResume] Setting isSpeaking = false (was {isSpeaking})");
             isSpeaking = false;
             if (isListening && automaticListeningCoroutine == null && !shouldStopListening)
             {

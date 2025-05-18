@@ -51,6 +51,9 @@ public class FridaConversation : MonoBehaviour
     [Tooltip("Whether to log audio levels for threshold tuning")]
     [SerializeField] private bool debugAudioLevels = false;
     
+    [Tooltip("Whether to use filler phrases while waiting for Frida's response")]
+    [SerializeField] private bool useFillerPhrases = false;  // Disabled by default
+    
     private string sessionId;
     private bool isRecording = false;
 #if !UNITY_WEBGL || UNITY_EDITOR
@@ -1413,8 +1416,11 @@ public class FridaConversation : MonoBehaviour
         // Only proceed if we successfully got a transcription
         if (success && !string.IsNullOrEmpty(transcribedText))
         {
-            // Play a filler immediately
-            yield return StartCoroutine(PlayFiller());
+            // Play a filler only if enabled
+            if (useFillerPhrases)
+            {
+                yield return StartCoroutine(PlayFiller());
+            }
             
             // Get Frida's response
             yield return StartCoroutine(GetFridaResponse(transcribedText));
@@ -2664,8 +2670,11 @@ private void SubmitWebGLText()
     // Mark that we're processing to prevent new inputs
     isProcessingResponse = true;
     
-    // Play a filler immediately
-    StartCoroutine(PlayFiller());
+    // Play a filler only if enabled
+    if (useFillerPhrases)
+    {
+        StartCoroutine(PlayFiller());
+    }
     
     // Get Frida's response using the text
     StartCoroutine(GetFridaResponse(userText));

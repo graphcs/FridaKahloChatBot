@@ -21,6 +21,10 @@ public class FridaConversation : MonoBehaviour
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private int recordingDuration = 5;
     
+    // WebGL text input alternative
+    [SerializeField] private InputField webGLTextInput;
+    [SerializeField] private Button webGLSubmitButton;
+    
     // Use MonoBehaviour reference to avoid compile-time errors with different SALSA versions
     [Tooltip("Reference to the Salsa component on your character")]
     [SerializeField] private MonoBehaviour salsaComponent; // Using generic MonoBehaviour to support any SALSA version
@@ -49,7 +53,9 @@ public class FridaConversation : MonoBehaviour
     
     private string sessionId;
     private bool isRecording = false;
+#if !UNITY_WEBGL || UNITY_EDITOR
     private AudioClip recordingClip;
+#endif
     private bool isProcessingResponse = false;
     private bool isWaitingForResponse = false;
     private Coroutine checkResponseCoroutine;
@@ -145,14 +151,28 @@ public class FridaConversation : MonoBehaviour
                     Text buttonText = recordButton.GetComponentInChildren<Text>();
                     if (buttonText != null)
                     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+                        buttonText.text = "Type Message";
+#else
                         buttonText.text = "Pause Listening";
+#endif
                     }
                 }
+                
+#if UNITY_WEBGL && !UNITY_EDITOR
+                // In WebGL, we'll use the record button to show the text input
+                recordButton.onClick.AddListener(ShowWebGLTextInput);
+#endif
             }
             else
             {
                 Debug.LogWarning("Record button not assigned!");
             }
+            
+            // Configure WebGL text input if available
+#if UNITY_WEBGL && !UNITY_EDITOR
+            SetupWebGLTextInput();
+#endif
             
             if (endSessionButton != null)
             {
@@ -484,6 +504,10 @@ public class FridaConversation : MonoBehaviour
     
     public void StartAutomaticListening()
     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        Debug.Log("Automatic listening not available in WebGL. Using text input instead.");
+        return;
+#else
         if (automaticListeningCoroutine == null && !isListening && !isSpeaking)
         {
             shouldStopListening = false;
@@ -502,10 +526,15 @@ public class FridaConversation : MonoBehaviour
             
             Debug.Log("Started automatic listening");
         }
+#endif
     }
     
     public void StopAutomaticListening()
     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        Debug.Log("Automatic listening not available in WebGL.");
+        return;
+#else
         shouldStopListening = true;
         
         // Update button text if available
@@ -519,6 +548,7 @@ public class FridaConversation : MonoBehaviour
         }
         
         Debug.Log("Stopping automatic listening");
+#endif
     }
     
     private void PauseListeningForSpeech()
@@ -529,6 +559,7 @@ public class FridaConversation : MonoBehaviour
         Debug.Log($"[PauseListeningForSpeech] Setting isSpeaking = true (was {isSpeaking})");
         isSpeaking = true;
         
+#if !UNITY_WEBGL || UNITY_EDITOR
         // First stop any ongoing recording
         if (isRecording && dynamicRecordingCoroutine != null)
         {
@@ -555,6 +586,7 @@ public class FridaConversation : MonoBehaviour
             // We're still technically "listening" in the sense that we'll resume
             // after speaking, so don't set isListening to false here
         }
+#endif
         
         // Start monitoring when to resume listening
         if (speakingMonitorCoroutine != null)
@@ -626,6 +658,10 @@ public class FridaConversation : MonoBehaviour
     
     private IEnumerator AutomaticListeningLoop()
     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        Debug.LogWarning("Automatic listening loop cannot be started in WebGL.");
+        yield break;
+#else
         Debug.Log(">>> STARTING AUTOMATIC LISTENING LOOP <<<");
         
         // Set the listening state
@@ -761,10 +797,15 @@ public class FridaConversation : MonoBehaviour
         isListening = false;
         automaticListeningCoroutine = null;
         Debug.Log(">>> AUTOMATIC LISTENING LOOP ENDED <<<");
+#endif
     }
     
     public void ToggleRecording()
     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // In WebGL, show the text input UI
+        ShowWebGLTextInput();
+#else
         if (useAutomaticListening)
         {
             // Toggle automatic listening on/off
@@ -798,11 +839,16 @@ public class FridaConversation : MonoBehaviour
                 }
             }
         }
+#endif
     }
     
     // New dynamic recording method similar to the Python implementation
     private IEnumerator DynamicRecordAndProcess()
     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        Debug.LogWarning("Microphone recording not supported in WebGL.");
+        yield break;
+#else
         // Reset isSpeaking state to make sure we can record
         // BUT ONLY if we're not already in a speaking state - this protects during Frida's response
         if (!isSpeaking && !isProcessingResponse && !isWaitingForResponse) 
@@ -1167,10 +1213,15 @@ public class FridaConversation : MonoBehaviour
                 }
             }
         }
+#endif
     }
     
     private IEnumerator RecordAndProcess()
     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        Debug.LogWarning("Microphone recording not supported in WebGL.");
+        yield break;
+#else
         isRecording = true;
         
         // Update UI
@@ -1284,6 +1335,7 @@ public class FridaConversation : MonoBehaviour
                 buttonText.text = "Record";
             }
         }
+#endif
     }
     
     private IEnumerator TranscribeAudio(byte[] audioData)
@@ -2463,4 +2515,160 @@ public class FridaConversation : MonoBehaviour
             StopCoroutine(speakingMonitorCoroutine);
         }
     }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+// WebGL-specific setup and handling
+private void SetupWebGLTextInput()
+{
+    if (webGLTextInput == null)
+    {
+        // If no text input was assigned, try to create one
+        Debug.LogWarning("WebGL text input not assigned. Voice recording is not supported in WebGL.");
+        
+        // Try to find a Canvas in the scene to parent the input to
+        Canvas canvas = FindObjectOfType<Canvas>();
+        if (canvas == null)
+        {
+            // Create a canvas if none exists
+            GameObject canvasObj = new GameObject("WebGLInputCanvas");
+            canvas = canvasObj.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvasObj.AddComponent<CanvasScaler>();
+            canvasObj.AddComponent<GraphicRaycaster>();
+        }
+        
+        // Create input field
+        GameObject inputObj = new GameObject("WebGLTextInput");
+        inputObj.transform.SetParent(canvas.transform, false);
+        
+        // Add components for input field
+        RectTransform rectTransform = inputObj.AddComponent<RectTransform>();
+        rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
+        rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+        rectTransform.pivot = new Vector2(0.5f, 0.5f);
+        rectTransform.sizeDelta = new Vector2(400, 50);
+        
+        // Add image background
+        Image bgImage = inputObj.AddComponent<Image>();
+        bgImage.color = new Color(0.1f, 0.1f, 0.1f, 0.9f);
+        
+        // Add InputField component
+        webGLTextInput = inputObj.AddComponent<InputField>();
+        
+        // Create text component for input field
+        GameObject textObj = new GameObject("Text");
+        textObj.transform.SetParent(inputObj.transform, false);
+        RectTransform textRectTransform = textObj.AddComponent<RectTransform>();
+        textRectTransform.anchorMin = new Vector2(0, 0);
+        textRectTransform.anchorMax = new Vector2(1, 1);
+        textRectTransform.offsetMin = new Vector2(10, 5);
+        textRectTransform.offsetMax = new Vector2(-10, -5);
+        
+        Text text = textObj.AddComponent<Text>();
+        text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        text.fontSize = 24;
+        text.color = Color.white;
+        
+        webGLTextInput.textComponent = text;
+        
+        // Create submit button 
+        GameObject buttonObj = new GameObject("SubmitButton");
+        buttonObj.transform.SetParent(canvas.transform, false);
+        RectTransform buttonRectTransform = buttonObj.AddComponent<RectTransform>();
+        buttonRectTransform.anchorMin = new Vector2(0.5f, 0.5f);
+        buttonRectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+        buttonRectTransform.pivot = new Vector2(0.5f, 0.5f);
+        buttonRectTransform.sizeDelta = new Vector2(150, 50);
+        buttonRectTransform.anchoredPosition = new Vector2(0, -75);
+        
+        Image buttonImage = buttonObj.AddComponent<Image>();
+        buttonImage.color = new Color(0.2f, 0.6f, 0.2f, 1f);
+        
+        webGLSubmitButton = buttonObj.AddComponent<Button>();
+        webGLSubmitButton.targetGraphic = buttonImage;
+        
+        // Create button text
+        GameObject buttonTextObj = new GameObject("Text");
+        buttonTextObj.transform.SetParent(buttonObj.transform, false);
+        RectTransform buttonTextRectTransform = buttonTextObj.AddComponent<RectTransform>();
+        buttonTextRectTransform.anchorMin = new Vector2(0, 0);
+        buttonTextRectTransform.anchorMax = new Vector2(1, 1);
+        buttonTextRectTransform.offsetMin = Vector2.zero;
+        buttonTextRectTransform.offsetMax = Vector2.zero;
+        
+        Text buttonText = buttonTextObj.AddComponent<Text>();
+        buttonText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        buttonText.fontSize = 20;
+        buttonText.color = Color.white;
+        buttonText.alignment = TextAnchor.MiddleCenter;
+        buttonText.text = "Submit";
+        
+        // Add click handler
+        webGLSubmitButton.onClick.AddListener(SubmitWebGLText);
+    }
+    
+    // Hide the text input initially, we'll show it when needed
+    if (webGLTextInput != null && webGLTextInput.gameObject.activeSelf)
+        webGLTextInput.gameObject.SetActive(false);
+        
+    // Hide submit button initially
+    if (webGLSubmitButton != null && webGLSubmitButton.gameObject.activeSelf)
+        webGLSubmitButton.gameObject.SetActive(false);
+}
+
+private void ShowWebGLTextInput()
+{
+    // Only proceed if we're not already processing a response
+    if (isProcessingResponse || isWaitingForResponse || isSpeaking)
+    {
+        Debug.Log("Cannot start new input while processing previous request");
+        return;
+    }
+    
+    if (webGLTextInput != null)
+    {
+        webGLTextInput.gameObject.SetActive(true);
+        webGLTextInput.text = "";
+        webGLTextInput.Select();
+        webGLTextInput.ActivateInputField();
+    }
+    
+    if (webGLSubmitButton != null)
+    {
+        webGLSubmitButton.gameObject.SetActive(true);
+    }
+}
+
+private void SubmitWebGLText()
+{
+    if (webGLTextInput == null || string.IsNullOrWhiteSpace(webGLTextInput.text))
+    {
+        Debug.LogWarning("No text provided");
+        return;
+    }
+    
+    // Hide the input controls
+    webGLTextInput.gameObject.SetActive(false);
+    if (webGLSubmitButton != null)
+        webGLSubmitButton.gameObject.SetActive(false);
+    
+    // Process the text input
+    string userText = webGLTextInput.text;
+    Debug.Log($"WebGL text input: {userText}");
+    
+    // Display in log
+    Debug.Log("========================================");
+    Debug.Log($"USER INPUT: \"{userText}\"");
+    Debug.Log("========================================");
+    
+    // Mark that we're processing to prevent new inputs
+    isProcessingResponse = true;
+    
+    // Play a filler immediately
+    StartCoroutine(PlayFiller());
+    
+    // Get Frida's response using the text
+    StartCoroutine(GetFridaResponse(userText));
+}
+#endif
 } 

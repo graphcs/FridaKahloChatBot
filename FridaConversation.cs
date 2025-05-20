@@ -139,6 +139,14 @@ public class FridaConversation : MonoBehaviour
         {
             Debug.Log("Starting Frida Conversation...");
             
+            // Override server URL for WebGL builds
+#if UNITY_WEBGL && !UNITY_EDITOR
+            serverUrl = "http://159.89.242.80:5001";
+            Debug.Log($"Using WebGL remote server URL: {serverUrl}");
+#else
+            Debug.Log($"Using local server URL: {serverUrl}");
+#endif
+            
             // Ensure there's an AudioListener in the scene
             EnsureAudioListener();
             

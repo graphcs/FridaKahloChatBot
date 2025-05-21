@@ -293,6 +293,7 @@ public class FridaConversation : MonoBehaviour
         try
         {
             www = UnityWebRequest.PostWwwForm(url, "");
+            www = ConfigureWebRequest(www); // Add CORS configuration
         }
         catch (System.Exception e)
         {
@@ -1371,6 +1372,7 @@ public class FridaConversation : MonoBehaviour
         try
         {
             www = UnityWebRequest.Post(url, form);
+            www = ConfigureWebRequest(www); // Add CORS configuration
         }
         catch (System.Exception e)
         {
@@ -1480,6 +1482,7 @@ public class FridaConversation : MonoBehaviour
             www.uploadHandler = new UploadHandlerRaw(bodyRaw);
             www.downloadHandler = new DownloadHandlerBuffer();
             www.SetRequestHeader("Content-Type", "application/json");
+            www = ConfigureWebRequest(www); // Add CORS configuration
         }
         catch (System.Exception e)
         {
@@ -1566,6 +1569,7 @@ public class FridaConversation : MonoBehaviour
         try
         {
             www = UnityWebRequest.PostWwwForm(url, "");
+            www = ConfigureWebRequest(www); // Add CORS configuration
         }
         catch (System.Exception e)
         {
@@ -1677,6 +1681,7 @@ public class FridaConversation : MonoBehaviour
                 www.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 www.downloadHandler = new DownloadHandlerBuffer();
                 www.SetRequestHeader("Content-Type", "application/json");
+                www = ConfigureWebRequest(www); // Add CORS configuration
             }
             catch (System.Exception e)
             {
@@ -1857,6 +1862,7 @@ public class FridaConversation : MonoBehaviour
         try
         {
             audioWww = UnityWebRequestMultimedia.GetAudioClip(directAudioUrl, AudioType.MPEG);
+            audioWww = ConfigureWebRequest(audioWww); // Add CORS configuration
         }
         catch (Exception e)
         {
@@ -2015,6 +2021,7 @@ public class FridaConversation : MonoBehaviour
         try
         {
             www = UnityWebRequestMultimedia.GetAudioClip("file://" + filePath, AudioType.MPEG);
+            www = ConfigureWebRequest(www); // Add CORS configuration
         }
         catch (Exception e)
         {
@@ -2416,6 +2423,7 @@ public class FridaConversation : MonoBehaviour
             www.uploadHandler = new UploadHandlerRaw(bodyRaw);
             www.downloadHandler = new DownloadHandlerBuffer();
             www.SetRequestHeader("Content-Type", "application/json");
+            www = ConfigureWebRequest(www); // Add CORS configuration
         }
         catch (System.Exception e)
         {
@@ -2688,4 +2696,17 @@ private void SubmitWebGLText()
     StartCoroutine(GetFridaResponse(userText));
 }
 #endif
+
+// Helper method to configure WebRequest with proper CORS settings
+private UnityWebRequest ConfigureWebRequest(UnityWebRequest www)
+{
+#if UNITY_WEBGL && !UNITY_EDITOR
+    // Add special headers for CORS in WebGL
+    www.SetRequestHeader("Access-Control-Allow-Origin", "*");
+    www.SetRequestHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    www.SetRequestHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    Debug.Log($"Configured request with CORS headers for WebGL: {www.url}");
+#endif
+    return www;
+}
 } 

@@ -16,6 +16,27 @@ import random
 
 app = Flask(__name__)
 
+# Enable CORS for all routes - this is crucial for WebGL builds
+@app.after_request
+def add_cors_headers(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')  # Allow requests from any origin
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    # Handle preflight requests
+    if request.method == 'OPTIONS':
+        return response
+    return response
+
+# Add a route to handle preflight OPTIONS requests explicitly
+@app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
+@app.route('/<path:path>', methods=['OPTIONS'])
+def handle_options(path):
+    response = make_response()
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    return response
+
 # Set up Swagger UI
 SWAGGER_URL = "/api/docs"  # URL for exposing Swagger UI
 API_URL = "/static/swagger.json"  # Our API url (can of course be a local resource)

@@ -1,0 +1,244 @@
+
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Frida Kahlo Conversation API",
+    "description": "API for conversing with Frida Kahlo AI character",
+    "version": "1.0.0"
+  },
+  "host": "localhost:5001",
+  "basePath": "/",
+  "schemes": [
+    "http"
+  ],
+  "paths": {
+    "/start_session": {
+      "post": {
+        "summary": "Start a new conversation session",
+        "produces": ["application/json"],
+        "responses": {
+          "200": {
+            "description": "Session started successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "session_id": {"type": "string"},
+                "welcome_text": {"type": "string"},
+                "welcome_audio": {"type": "string"},
+                "estimated_duration": {"type": "number"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transcribe": {
+      "post": {
+        "summary": "Transcribe audio to text",
+        "consumes": ["multipart/form-data"],
+        "parameters": [
+          {
+            "name": "audio",
+            "in": "formData",
+            "description": "Audio file to transcribe",
+            "required": true,
+            "type": "file"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcription successful",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "text": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/get_filler": {
+      "post": {
+        "summary": "Get a random filler statement",
+        "produces": ["application/json"],
+        "responses": {
+          "200": {
+            "description": "Filler retrieved successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "text": {"type": "string"},
+                "audio_base64": {"type": "string"},
+                "estimated_duration": {"type": "number"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/get_response": {
+      "post": {
+        "summary": "Start generating a response from Frida",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "text": {"type": "string"},
+                "session_id": {"type": "string"}
+              },
+              "required": ["text", "session_id"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response generation started",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/check_response": {
+      "post": {
+        "summary": "Check if a response is ready",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "session_id": {"type": "string"}
+              },
+              "required": ["session_id"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response status",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "completed": {"type": "boolean"},
+                "status": {"type": "string"},
+                "text": {"type": "string"},
+                "audio_base64": {"type": "string"},
+                "duration": {"type": "number"},
+                "phoneme_data": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "word": {"type": "string"},
+                      "start_time": {"type": "number"},
+                      "end_time": {"type": "number"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/end_session": {
+      "post": {
+        "summary": "End a conversation session",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "session_id": {"type": "string"}
+              },
+              "required": ["session_id"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session ended successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/get_audio": {
+      "get": {
+        "summary": "Download the most recent audio directly as MP3",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audio retrieved successfully",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "404": {
+            "description": "Audio not found"
+          }
+        }
+      }
+    },
+    "/get_response_audio": {
+      "post": {
+        "summary": "Alternative endpoint to get audio in WAV format",
+        "consumes": ["application/json"],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audio URL retrieved successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "audio_url": {"type": "string"}
+              }
+            }
+          },
+          "404": {
+            "description": "Audio not found"
+          }
+        }
+      }
+    }
+  }
+}
